@@ -14,7 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 class FacebookScraper:
-    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url):
+    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root):
         self.queue_count = 0
         self.matrix = matrix 
         self.log = log_callback
@@ -23,45 +23,8 @@ class FacebookScraper:
         self.initial_url = initial_url
         self.driver = None
         self.odoo_tab = None
+        self.root = root
         
-        self.root.after(500, self.show_custom_tutorial)
-
-    def show_custom_tutorial(self):
-        overlay = tk.Toplevel(self.root)
-        overlay.title("Hướng dẫn sử dụng")
-        overlay.geometry("500x350")
-        overlay.configure(bg=CARD)
-        overlay.resizable(False, False)
-        overlay.transient(self.root) # Luôn nằm trên cửa sổ chính
-        overlay.grab_set() # Khóa tương tác với cửa sổ chính cho đến khi đóng pop-up
-
-        # Center pop-up
-        self.root.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 250
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
-        overlay.geometry(f"+{x}+{y}")
-
-        tk.Label(
-            overlay, text="LƯU Ý TRƯỚC KHI CHẠY", 
-            bg=CARD, fg=ACCENT, font=("Segoe UI Semibold", 16)
-        ).pack(pady=(20, 10))
-
-        msg = (
-            "• Hãy đăng nhập Odoo & vượt Cloudflare thủ công trước.\n"
-            "• Đảm bảo đã đăng nhập đúng tài khoản Facebook trên Edge.\n"
-            "• Script sử dụng Profile Edge hiện tại của bạn.\n"
-            "• Yêu cầu đường truyền mạng ổn định, tốc độ cao.\n\n"
-            "Lưu ý: Đây là phiên bản Demo."
-        )
-
-        tk.Label(
-            overlay, text=msg, bg=CARD, fg=TEXT, 
-            font=("Segoe UI", 11), justify="left", padx=30
-        ).pack(fill="x", pady=10)
-
-        self.modern_button(
-            overlay, "Đã hiểu", ACCENT, overlay.destroy
-        ).pack(pady=20)
 
     def close_all_edge_instances(self):
         try:

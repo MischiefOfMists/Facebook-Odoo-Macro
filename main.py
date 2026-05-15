@@ -456,7 +456,7 @@ class MacroApp:
         self.stop_event.clear()
         self.log_message("Bắt đầu tiến trình...")
 
-        scraper = FacebookScraper(matrix, self.log_message, self.pause_event, self.stop_event, url)
+        scraper = FacebookScraper(matrix, self.log_message, self.pause_event, self.stop_event, url, self.root)
         self.scraper_thread = threading.Thread(target=self.run_scraper, args=(scraper,), daemon=True)
         self.scraper_thread.start()
 
