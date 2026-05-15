@@ -4,105 +4,152 @@ from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
 import threading
 import os
-import random
 from core.scraper import FacebookScraper
 
-# Constants
+# =========================================================
+# HẰNG SỐ
+# =========================================================
+
 MATRIX_FOLDER = os.path.join("data", "matrix")
 os.makedirs(MATRIX_FOLDER, exist_ok=True)
 
 ODOO_URLS = {
     "B2C": "https://b2c.sge.vn/odoo/crm",
-    "None": None
+    "Yingbo Demo": "https://yingbo_demo.sge.vn/odoo/crm"
 }
+
+# =========================================================
+# MÀU SẮC
+# =========================================================
+
+BG = "#0f1117"
+CARD = "#191c25"
+CARD_2 = "#232734"
+ACCENT = "#6c63ff"
+DANGER = "#ff5e7e"
+TEXT = "#f5f7ff"
+SUBTEXT = "#9aa4bf"
+BUTTON = "#2d3345"
+INPUT = "#242938"
+
+# =========================================================
+# TRÌNH CHỈNH SỬA VĂN BẢN
+# =========================================================
 
 class TextEditor(tk.Toplevel):
     def __init__(self, parent, file_path, title):
         super().__init__(parent)
         self.file_path = file_path
-        self.title(f"Editing: {title}")
-        self.geometry("500x550")
-        self.configure(bg="#2b2d31")
-        
-        # Track initial content to check for unsaved changes
+        self.title(f"Đang chỉnh sửa • {title}")
+        self.geometry("580x620")
+        self.configure(bg=BG)
+
         self.initial_content = ""
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 self.initial_content = f.read()
 
-        # The Text Widget with Undo enabled
-        self.textbox = tk.Text(
-            self, bg="#1e1f22", fg="#d7dce2", 
-            insertbackground="white", relief="flat", 
-            font=("Consolas", 11), padx=10, pady=10,
-            undo=True  # Enables Ctrl+Z naturally
+        # HEADER
+        topbar = tk.Frame(self, bg=BG)
+        topbar.pack(fill="x", padx=20, pady=(20, 10))
+
+        tk.Label(
+            topbar,
+            text=title,
+            bg=BG,
+            fg=TEXT,
+            font=("Segoe UI Semibold", 18)
+        ).pack(side="left")
+
+        # EDITOR AREA
+        editor_container = tk.Frame(
+            self,
+            bg=CARD,
+            highlightthickness=1,
+            highlightbackground="#2a3042"
         )
-        self.textbox.pack(fill="both", expand=True, padx=15, pady=15)
+        editor_container.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+
+        self.textbox = tk.Text(
+            editor_container,
+            bg=CARD,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            borderwidth=0,
+            font=("Consolas", 11),
+            padx=18,
+            pady=18,
+            undo=True,
+            wrap="word"
+        )
+        self.textbox.pack(fill="both", expand=True)
         self.textbox.insert("1.0", self.initial_content)
 
-        # Button Container (Bottom Row)
-        btn_frame = tk.Frame(self, bg="#2b2d31")
-        btn_frame.pack(fill="x", side="bottom", pady=(0, 15), padx=15)
+        # BUTTONS
+        btn_row = tk.Frame(self, bg=BG)
+        btn_row.pack(fill="x", padx=20, pady=(0, 20))
 
-        # Undo Button
-        self.undo_btn = tk.Button(
-            btn_frame, text="UNDO", bg="#4e5058", fg="white", 
-            relief="flat", font=("Segoe UI Bold", 9), width=10,
-            command=self.textbox.edit_undo
-        )
-        self.undo_btn.pack(side="left", padx=5)
+        self.create_button(btn_row, "Hoàn tác", BUTTON, self.textbox.edit_undo).pack(side="left", padx=(0, 10))
+        self.create_button(btn_row, "Lưu lại", ACCENT, self.save_content).pack(side="left")
+        self.create_button(btn_row, "Đóng", DANGER, self.on_close).pack(side="right")
 
-        # Save Button
-        self.save_btn = tk.Button(
-            btn_frame, text="SAVE", bg="#5865f2", fg="white", 
-            relief="flat", font=("Segoe UI Bold", 9), width=10,
-            command=self.save_content
-        )
-        self.save_btn.pack(side="left", padx=5)
-
-        # Close Button
-        self.close_btn = tk.Button(
-            btn_frame, text="CLOSE", bg="#ed4245", fg="white", 
-            relief="flat", font=("Segoe UI Bold", 9), width=10,
-            command=self.on_close
-        )
-        self.close_btn.pack(side="right", padx=5)
-
-        # Intercept the 'X' button on the window
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    
+
+    def create_button(self, parent, text, color, command):
+        return tk.Button(
+            parent,
+            text=text,
+            bg=color,
+            fg="white",
+            activebackground=color,
+            activeforeground="white",
+            relief="flat",
+            borderwidth=0,
+            font=("Segoe UI Semibold", 10),
+            padx=18,
+            pady=10,
+            cursor="hand2",
+            command=command
+        )
 
     def save_content(self):
         content = self.textbox.get("1.0", "end-1c")
         try:
             with open(self.file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            self.initial_content = content # Update initial state after saving
-            # Optional: simple flash or log to show it saved
+            self.initial_content = content
         except Exception as e:
-            messagebox.showerror("Error", f"Could not save file: {e}")
+            messagebox.showerror("Lỗi", f"Không thể lưu tệp:\n{e}")
 
     def on_close(self):
         current_content = self.textbox.get("1.0", "end-1c")
         if current_content != self.initial_content:
             response = messagebox.askyesnocancel(
-                "Unsaved Changes", 
-                "You have unsaved changes. Do you want to save before closing?"
+                "Thay đổi chưa lưu",
+                "Bạn có muốn lưu các thay đổi trước khi đóng không?"
             )
-            if response is True: # Yes
+            if response is True:
                 self.save_content()
                 self.destroy()
-            elif response is False: # No
+            elif response is False:
                 self.destroy()
-            # If 'cancel', do nothing and stay in editor
         else:
             self.destroy()
+
+# =========================================================
+# ỨNG DỤNG CHÍNH
+# =========================================================
 
 class MacroApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FB Messenger Macro")
-        self.root.geometry("850x780")
-        self.root.configure(bg="#1e1f22")
+        self.root.geometry("1180x720")
+        self.root.minsize(1250, 720)
+        self.root.configure(bg=BG)
 
         self.scraper_thread = None
         self.pause_event = threading.Event()
@@ -111,71 +158,270 @@ class MacroApp:
         self.setup_style()
         self.setup_ui()
 
+        self.root.after(500, self.show_custom_tutorial)
+
+    def show_custom_tutorial(self):
+        overlay = tk.Toplevel(self.root)
+        overlay.title("Hướng dẫn sử dụng")
+        overlay.geometry("650x350")
+        overlay.configure(bg=CARD)
+        overlay.resizable(False, False)
+        overlay.transient(self.root) # Luôn nằm trên cửa sổ chính
+        overlay.grab_set() # Khóa tương tác với cửa sổ chính cho đến khi đóng pop-up
+
+        # Center pop-up
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 250
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
+        overlay.geometry(f"+{x}+{y}")
+
+        tk.Label(
+            overlay, text="LƯU Ý TRƯỚC KHI CHẠY", 
+            bg=CARD, fg=ACCENT, font=("Segoe UI Semibold", 16)
+        ).pack(pady=(20, 10))
+
+        msg = (
+            "Script sử dụng Profile Edge hiện tại của bạn. Trước khi bắt đầu script, hãy:\n\n"
+            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên Edge để đảm bảo độ mượt.\n"
+            "• Dăng nhập đúng tài khoản Facebook trước trên Edge.\n"
+            "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n\n"
+            "Lưu ý: Đây là phiên bản Demo."
+        )
+
+        tk.Label(
+            overlay, text=msg, bg=CARD, fg=TEXT, 
+            font=("Segoe UI", 11), justify="left", padx=30
+        ).pack(fill="x", pady=10)
+
+        self.modern_button(
+            overlay, "Đã hiểu", ACCENT, overlay.destroy
+        ).pack(pady=20)
+
     def setup_style(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure(".", background="#1e1f22", foreground="white", fieldbackground="#2b2d31", font=("Segoe UI", 10))
-        style.configure("Card.TFrame", background="#2b2d31")
-        style.configure("Title.TLabel", font=("Segoe UI Semibold", 20), background="#1e1f22", foreground="white")
-        style.configure("Sub.TLabel", font=("Segoe UI", 10), background="#1e1f22", foreground="#b5bac1")
-        style.configure("Modern.TButton", font=("Segoe UI Semibold", 10), padding=10, background="#5865f2", foreground="white")
-        style.map("Modern.TButton", background=[("active", "#6d78ff"), ("disabled", "#3a3c42")])
-        style.configure("Matrix.TButton", font=("Segoe UI", 9), padding=5, background="#404249", foreground="white")
-        style.map("Matrix.TButton", background=[("active", "#4e5058")])
+        style.configure(
+            "Modern.TCombobox",
+            fieldbackground=INPUT,
+            background=INPUT,
+            foreground=TEXT,
+            bordercolor="#32384d",
+            lightcolor="#32384d",
+            darkcolor="#32384d",
+            arrowcolor=TEXT,
+            padding=10,
+            font=("Segoe UI", 10)
+        )
+        style.map(
+            "Modern.TCombobox",
+            fieldbackground=[("readonly", INPUT), ("active", INPUT)],
+            background=[("readonly", INPUT), ("active", INPUT)],
+            foreground=[("readonly", TEXT), ("active", TEXT)],
+            arrowcolor=[("active", TEXT), ("readonly", TEXT)],
+            bordercolor=[("focus", ACCENT), ("readonly", "#32384d")]
+        )
+        self.root.option_add("*TCombobox*Listbox.background", CARD_2)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "white")
+        self.root.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+
+    def create_card(self, parent):
+        return tk.Frame(
+            parent,
+            bg=CARD,
+            highlightthickness=1,
+            highlightbackground="#2a3042"
+        )
+
+    def create_section_title(self, parent, title):
+        tk.Label(
+            parent,
+            text=title,
+            bg=parent["bg"],
+            fg=TEXT,
+            font=("Segoe UI Semibold", 18)
+        ).pack(anchor="w", pady=(0, 12))
+
+    def modern_button(self, parent, text, color, command):
+        return tk.Button(
+            parent,
+            text=text,
+            bg=color,
+            fg="white",
+            activebackground=color,
+            activeforeground="white",
+            relief="flat",
+            borderwidth=0,
+            font=("Segoe UI Semibold", 10),
+            padx=16,
+            pady=10,
+            cursor="hand2",
+            command=command
+        )
 
     def setup_ui(self):
-        # Header
-        header = tk.Frame(self.root, bg="#1e1f22")
-        header.pack(fill="x", padx=25, pady=(20, 10))
-        ttk.Label(header, text="FB Messenger Macro", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(header, text="3x3 Matrix Controller", style="Sub.TLabel").pack(anchor="w")
+        # HEADER
+        topbar = tk.Frame(self.root, bg=BG)
+        topbar.pack(fill="x", padx=25, pady=(20, 10))
 
-        # Main Card
-        card = ttk.Frame(self.root, style="Card.TFrame")
-        card.pack(fill="both", expand=True, padx=20, pady=10)
+        tk.Label(
+            topbar,
+            text="FB Messenger Macro",
+            bg=BG,
+            fg=TEXT,
+            font=("Segoe UI Semibold", 24)
+        ).pack(anchor="w")
 
-        # Matrix Section
-        matrix_label = tk.Label(card, text="MESSAGE MATRIX (CLICK TO EDIT 0-8.txt)", bg="#2b2d31", fg="#b5bac1", font=("Segoe UI Semibold", 10))
-        matrix_label.pack(anchor="w", padx=20, pady=(15, 5))
+        tk.Label(
+            topbar,
+            text="Bảng điều khiển Matrix Hiện đại",
+            bg=BG,
+            fg=SUBTEXT,
+            font=("Segoe UI", 10)
+        ).pack(anchor="w")
+
+        # MAIN LAYOUT
+        main = tk.Frame(self.root, bg=BG)
+        main.pack(fill="both", expand=True, padx=25, pady=(5, 25))
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_columnconfigure(2, weight=1)
+
+        # LEFT COLUMN (LOGS)
+        left = tk.Frame(main, bg=BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.create_section_title(left, "Nhật ký hoạt động")
+        log_card = self.create_card(left)
+        log_card.pack(fill="both", expand=True)
+
+        self.log_widget = ScrolledText(
+            log_card,
+            state=tk.DISABLED,
+            bg=CARD,
+            fg="#dbe2ff",
+            insertbackground="white",
+            relief="flat",
+            borderwidth=0,
+            font=("Consolas", 10),
+            padx=15,
+            pady=15
+        )
+        self.log_widget.pack(fill="both", expand=True)
+
+        # CENTER COLUMN (SETUP)
+        center = tk.Frame(main, bg=BG)
+        center.grid(row=0, column=1, sticky="nsew", padx=10)
         
-        matrix_frame = tk.Frame(card, bg="#2b2d31")
-        matrix_frame.pack(padx=20, pady=10)
+        self.create_section_title(center, "Thẻ hiện tại")
+        current_card = self.create_card(center)
+        current_card.pack(fill="x")
 
+        preview_area = tk.Frame(current_card, bg=CARD_2, height=180)
+        preview_area.pack(fill="both", expand=True, padx=15, pady=15)
+        preview_area.pack_propagate(False)
+
+        tk.Label(
+            preview_area,
+            text="Chưa triển khai",
+            bg=CARD_2,
+            fg=SUBTEXT,
+            font=("Segoe UI", 14)
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Frame(center, bg=BG, height=20).pack()
+        self.create_section_title(center, "Cấu hình")
+
+        setup_card = self.create_card(center)
+        setup_card.pack(fill="x")
+        content = tk.Frame(setup_card, bg=CARD)
+        content.pack(fill="both", expand=True, padx=15, pady=15)
+
+        tk.Label(content, text="Trình duyệt", bg=CARD, fg=SUBTEXT).pack(anchor="w")
+        self.browser_var = tk.StringVar(value="Edge")
+        ttk.Combobox(
+            content,
+            textvariable=self.browser_var,
+            values=["Edge"],
+            state="readonly",
+            style="Modern.TCombobox"
+        ).pack(fill="x", pady=(6, 18))
+
+        tk.Label(content, text="Trang nguồn (Odoo)", bg=CARD, fg=SUBTEXT).pack(anchor="w")
+        self.url_var = tk.StringVar(value="Yingbo Demo")
+        self.dropdown = ttk.Combobox(
+            content,
+            textvariable=self.url_var,
+            values=list(ODOO_URLS.keys()),
+            state="readonly",
+            style="Modern.TCombobox"
+        )
+        self.dropdown.pack(fill="x", pady=(6, 25))
+
+        button_row = tk.Frame(content, bg=CARD)
+        button_row.pack(fill="x")
+
+        self.btn_start = self.modern_button(button_row, "Bắt đầu", ACCENT, self.start)
+        self.btn_start.configure(width=12)
+        self.btn_start.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_pause = self.modern_button(button_row, "Tạm dừng", BUTTON, self.pause)
+        self.btn_pause.config(state=tk.DISABLED, width=12)
+        self.btn_pause.pack(side="left", fill="x", expand=True, padx=6)
+
+        self.btn_stop = self.modern_button(button_row, "Dừng", DANGER, self.stop)
+        self.btn_stop.config(state=tk.DISABLED, width=12)
+        self.btn_stop.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # RIGHT COLUMN (MATRIX)
+        right = tk.Frame(main, bg=BG)
+        right.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
+        self.create_section_title(right, "Ma trận nội dung")
+        matrix_card = self.create_card(right)
+        matrix_card.pack(fill="both", expand=True)
+
+        grid_container = tk.Frame(matrix_card, bg=CARD)
+        grid_container.pack(fill="both", expand=True, padx=10, pady=10)
+
+        for i in range(3):
+            grid_container.grid_columnconfigure(i, weight=1, uniform="col")
+            grid_container.grid_rowconfigure(i, minsize=120)
+            
         file_idx = 0
         for r in range(3):
             for c in range(3):
                 file_name = f"{file_idx}.txt"
                 path = os.path.join(MATRIX_FOLDER, file_name)
                 if not os.path.exists(path):
-                    with open(path, "w") as f: f.write(f"Sample line for {file_name}")
-                
-                btn = tk.Button(matrix_frame, text=f"Edit {file_name}\n(Row {r+1} Opt {c+1})", 
-                                bg="#404249", fg="white", relief="flat", width=22, height=3,
-                                command=lambda p=path, n=file_name: self.open_editor(p, n))
-                btn.grid(row=r, column=c, padx=5, pady=5)
+                    with open(path, "w", encoding="utf-8") as f: f.write("")
+
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        preview_text = f.read().strip()
+                except: preview_text = ""
+
+                if not preview_text: preview_text = "(trống)"
+                preview_text = preview_text[:120]
+
+                cell = tk.Frame(
+                    grid_container, bg=CARD_2, highlightthickness=1,
+                    highlightbackground="#32384d", cursor="hand2", height=120
+                )
+                cell.grid(row=r, column=c, sticky="ew", padx=6, pady=6)
+                cell.grid_propagate(False)
+                cell.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
+
+                top = tk.Frame(cell, bg=CARD_2)
+                top.pack(fill="x", padx=10, pady=(10, 0))
+                tk.Label(top, text=file_name, bg=CARD_2, fg=TEXT, font=("Segoe UI Semibold", 10)).pack(anchor="w")
+
+                preview = tk.Label(
+                    cell, text=preview_text, bg=CARD_2, fg=SUBTEXT,
+                    justify="left", anchor="nw", wraplength=120, font=("Segoe UI", 8)
+                )
+                preview.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
+                preview.pack(fill="both", expand=True, padx=10, pady=10)
                 file_idx += 1
-
-        # Controls Section
-        controls = tk.Frame(card, bg="#2b2d31")
-        controls.pack(fill="x", padx=20, pady=20)
-
-        tk.Label(controls, text="Target URL:", bg="#2b2d31", fg="white").pack(side="left", padx=(0, 10))
-        self.url_var = tk.StringVar(value="B2C")
-        self.dropdown = ttk.Combobox(controls, textvariable=self.url_var, values=list(ODOO_URLS.keys()), state="readonly", width=25)
-        self.dropdown.pack(side="left", padx=(0, 20))
-
-        self.btn_start = ttk.Button(controls, text="Start", style="Modern.TButton", command=self.start)
-        self.btn_start.pack(side="left", padx=5)
-        self.btn_pause = ttk.Button(controls, text="Pause", style="Modern.TButton", command=self.pause, state=tk.DISABLED)
-        self.btn_pause.pack(side="left", padx=5)
-        self.btn_stop = ttk.Button(controls, text="Stop", style="Modern.TButton", command=self.stop, state=tk.DISABLED)
-        self.btn_stop.pack(side="left", padx=5)
-
-        # Logs Section
-        console_frame = tk.Frame(card, bg="#2b2d31")
-        console_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        self.log_widget = ScrolledText(console_frame, state=tk.DISABLED, bg="#111214", fg="#d7dce2", relief="flat", font=("Consolas", 10), padx=10, pady=10)
-        self.log_widget.pack(fill="both", expand=True)
 
     def open_editor(self, path, name):
         TextEditor(self.root, path, name)
@@ -183,7 +429,7 @@ class MacroApp:
     def log_message(self, message):
         def append():
             self.log_widget.config(state=tk.NORMAL)
-            self.log_widget.insert(tk.END, f"-> {message}\n")
+            self.log_widget.insert(tk.END, f"➜ {message}\n")
             self.log_widget.see(tk.END)
             self.log_widget.config(state=tk.DISABLED)
         self.root.after(0, append)
@@ -203,13 +449,12 @@ class MacroApp:
     def start(self):
         url = ODOO_URLS.get(self.url_var.get())
         matrix = self.get_matrix_data_from_files()
-
         self.btn_start.config(state=tk.DISABLED)
         self.btn_pause.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.NORMAL)
-
         self.pause_event.clear()
         self.stop_event.clear()
+        self.log_message("Bắt đầu tiến trình...")
 
         scraper = FacebookScraper(matrix, self.log_message, self.pause_event, self.stop_event, url)
         self.scraper_thread = threading.Thread(target=self.run_scraper, args=(scraper,), daemon=True)
@@ -221,21 +466,21 @@ class MacroApp:
 
     def reset_buttons(self):
         self.btn_start.config(state=tk.NORMAL)
-        self.btn_pause.config(state=tk.DISABLED)
+        self.btn_pause.config(state=tk.DISABLED, text="Tạm dừng")
         self.btn_stop.config(state=tk.DISABLED)
 
     def pause(self):
         if self.pause_event.is_set():
             self.pause_event.clear()
-            self.btn_pause.config(text="Pause")
-            self.log_message("Resumed.")
+            self.btn_pause.config(text="Tạm dừng")
+            self.log_message("Đã tiếp tục.")
         else:
             self.pause_event.set()
-            self.btn_pause.config(text="Resume")
-            self.log_message("Paused.")
+            self.btn_pause.config(text="Tiếp tục")
+            self.log_message("Đã tạm dừng.")
 
     def stop(self):
-        self.log_message("Stopping...")
+        self.log_message("Đang dừng...")
         self.stop_event.set()
 
 if __name__ == "__main__":

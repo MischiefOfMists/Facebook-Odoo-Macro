@@ -2,6 +2,10 @@ import os
 import time
 import random
 import subprocess
+import pyperclip
+import win32clipboard
+from io import BytesIO
+from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.edge.options import Options
@@ -11,6 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 class FacebookScraper:
     def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url):
+        self.queue_count = 0
         self.matrix = matrix 
         self.log = log_callback
         self.pause_event = pause_event
@@ -18,25 +23,115 @@ class FacebookScraper:
         self.initial_url = initial_url
         self.driver = None
         self.odoo_tab = None
+        
+        self.root.after(500, self.show_custom_tutorial)
+
+    def show_custom_tutorial(self):
+        overlay = tk.Toplevel(self.root)
+        overlay.title("Hướng dẫn sử dụng")
+        overlay.geometry("500x350")
+        overlay.configure(bg=CARD)
+        overlay.resizable(False, False)
+        overlay.transient(self.root) # Luôn nằm trên cửa sổ chính
+        overlay.grab_set() # Khóa tương tác với cửa sổ chính cho đến khi đóng pop-up
+
+        # Center pop-up
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 250
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
+        overlay.geometry(f"+{x}+{y}")
+
+        tk.Label(
+            overlay, text="LƯU Ý TRƯỚC KHI CHẠY", 
+            bg=CARD, fg=ACCENT, font=("Segoe UI Semibold", 16)
+        ).pack(pady=(20, 10))
+
+        msg = (
+            "• Hãy đăng nhập Odoo & vượt Cloudflare thủ công trước.\n"
+            "• Đảm bảo đã đăng nhập đúng tài khoản Facebook trên Edge.\n"
+            "• Script sử dụng Profile Edge hiện tại của bạn.\n"
+            "• Yêu cầu đường truyền mạng ổn định, tốc độ cao.\n\n"
+            "Lưu ý: Đây là phiên bản Demo."
+        )
+
+        tk.Label(
+            overlay, text=msg, bg=CARD, fg=TEXT, 
+            font=("Segoe UI", 11), justify="left", padx=30
+        ).pack(fill="x", pady=10)
+
+        self.modern_button(
+            overlay, "Đã hiểu", ACCENT, overlay.destroy
+        ).pack(pady=20)
 
     def close_all_edge_instances(self):
         try:
-            self.log("System: Closing all Edge instances to prevent conflicts...")
+            self.log("Hệ thống: Đang đóng Edge và thực hiện dọn dẹp tab...")
+            
+            # 1. Force kill processes to release file locks
             subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["taskkill", "/F", "/IM", "msedgedriver.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(2)
-        except Exception:
-            pass
+
+            # 2. Define the 'Default' profile path
+            profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default")
+            
+            # 3. List of session files that force tabs to reopen
+            # We leave 'Cookies', 'Network', and 'Local Storage' alone so you stay logged in
+            session_files = [
+                "Last Session",
+                "Last Tabs",
+                "Current Session",
+                "Current Tabs",
+                "Session Storage" # This is a folder, handled below
+            ]
+            
+            for item in session_files:
+                target = os.path.join(profile_path, item)
+                if os.path.exists(target):
+                    try:
+                        if os.path.isdir(target):
+                            import shutil
+                            shutil.rmtree(target)
+                        else:
+                            os.remove(target)
+                    except Exception:
+                        pass 
+
+            # 4. CRITICAL: Reset the Preferences file
+            # Edge stores a "exit_type" here. If it's "Crashed", it reopens tabs.
+            pref_path = os.path.join(profile_path, "Preferences")
+            if os.path.exists(pref_path):
+                try:
+                    with open(pref_path, 'r', encoding='utf-8') as f:
+                        import json
+                        data = json.load(f)
+                    
+                    # Force Edge to think it closed normally
+                    if "profile" in data and "exit_type" in data["profile"]:
+                        data["profile"]["exit_type"] = "Normal"
+                    
+                    with open(pref_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f)
+                except Exception:
+                    pass
+
+            self.log("Hệ thống: Các tab đã được dọn dẹp. Phiên đăng nhập được giữ lại.")
+        except Exception as e:
+            self.log(f"Lỗi dọn dẹp: {str(e)}")
 
     def initialize_driver(self):
         self.close_all_edge_instances()
         options = Options()
         options.add_argument("--start-maximized")
         options.add_argument("--remote-allow-origins=*")
+        options.add_argument("--disable-restore-session-state")
+        options.add_argument("--no-first-run")
+        options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
         options.add_argument("--log-level=3")
         options.add_experimental_option("detach", True)
         
+        # Using the Default Edge Profile
         profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
         options.add_argument(f"--user-data-dir={profile_path}")
         options.add_argument("--profile-directory=Default")
@@ -45,67 +140,411 @@ class FacebookScraper:
             self.driver = webdriver.Edge(options=options)
             return True
         except Exception as e:
-            self.log(f"Critical: Browser Init Error -> {str(e)}")
+            self.log(f"Nghiêm trọng: Lỗi khởi tạo trình duyệt -> {str(e)}")
             return False
 
     def check_odoo_connection(self):
-        """Checks for the 'Connection lost' notification and refreshes if found."""
         try:
             lost_conn_xpath = "//span[contains(@class, 'o_notification_content') and contains(text(), 'Connection lost')]"
             notifications = self.driver.find_elements(By.XPATH, lost_conn_xpath)
             if notifications:
-                self.log("Odoo: Connection lost detected. Refreshing...")
+                self.log("Odoo: Phát hiện mất kết nối. Đang tải lại...")
                 self.driver.refresh()
                 time.sleep(10)
+                self.clear_odoo_filters() # Clear filter after refresh
                 return True
             return False
         except Exception:
             return False
 
+    def clear_odoo_filters(self):
+        """Surgical check to remove 'My Pipeline' facets if on the demo site."""
+        # if "yingbo_demo.sge.vn" in self.driver.current_url:
+        #     try:
+        #         # Short 3s wait: if it's not there, we don't want to waste time
+        #         facet_remove_btn = WebDriverWait(self.driver, 3).until(
+        #             EC.element_to_be_clickable((By.CSS_SELECTOR, "button.o_facet_remove.oi-close"))
+        #         )
+        #         self.driver.execute_script("arguments[0].click();", facet_remove_btn)
+        #         self.log("Odoo: Default filters cleared.")
+        #         time.sleep(10) # Allow Kanban to reload
+        #         return True
+        #     except Exception:
+        #         # Skip silently if the button is not found
+        #         return False
+        return False
+    
     def verify_initial_access(self):
-        """Verify Cloudflare and Odoo Interactivity. Returns True if OK."""
-        self.log(f"Odoo: Opening {self.initial_url}")
+        self.log(f"Odoo: Đang mở {self.initial_url}")
         self.driver.get(self.initial_url)
         time.sleep(10)
 
-        # 1. Cloudflare Detection
-        is_cf = (
-            "Just a moment" in self.driver.title or 
-            "Cloudflare" in self.driver.title or
-            "challenges.cloudflare.com" in self.driver.current_url
-        )
-        if is_cf or self.driver.find_elements(By.CSS_SELECTOR, "div#turnstile-wrapper, #cf-challenge"):
-            self.log("Critical: Cloudflare Turnstile detected. Manual intervention required.")
+        # 1. Cloudflare Check
+        if self.driver.find_elements(By.CSS_SELECTOR, "div#turnstile-wrapper, #cf-challenge"):
+            self.log("Nghiêm trọng: Phát hiện Cloudflare.")
             return False
-
-        # 2. Interactivity Check (Quick Note Test)
-        self.log("Odoo: Testing interactivity (Quick Note check)...")
+        
+        # CAPTURE INITIAL QUEUE COUNT
         try:
-            quick_note_btn = WebDriverWait(self.driver, 15).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, 'a.oe_kanban_action[data-tooltip="Quick note"]'))
+            new_col_xpath = "//div[contains(@class, 'o_kanban_group')][.//span[text()='New'] or .//span[text()='Mới']]"
+            new_column = self.driver.find_element(By.XPATH, new_col_xpath)
+            progress_bar = new_column.find_element(By.CSS_SELECTOR, "div[role='progressbar']")
+            val = progress_bar.get_attribute("aria-valuemax")
+            self.queue_count = int(val) if val else 0
+            self.log(f"Hệ thống: Phát hiện số lượng hàng đợi ban đầu là {self.queue_count}")
+        except Exception:
+            self.log("Cảnh báo: Không thể phát hiện số lượng hàng đợi ban đầu. Mặc định về 0.")
+            self.queue_count = 0
+
+        # 2. Interactivity Check
+        self.log("Odoo: Đang kiểm tra khả năng tương tác...")
+        try:
+            # We use a more generic selector to find ANY Kanban record available
+            # article.o_kanban_record is the standard Odoo class
+            kanban_card = WebDriverWait(self.driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "article.o_kanban_record"))
             )
-            self.driver.execute_script("arguments[0].click();", quick_note_btn)
             
-            # Verify panel opened (checking for the Website field container)
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div[name='x_website']"))
+            # Scroll to it first to ensure it's "active" in the browser's view
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", kanban_card)
+            time.sleep(1)
+            
+            # Force the click via JS (ignores overlays and "is_clickable" restrictions)
+            self.log("Odoo: Đang thử click vào thẻ bằng JS...")
+            self.driver.execute_script("arguments[0].click();", kanban_card)
+            
+            # Verify by looking for the 'name' textarea or the field container
+            # Added multiple selectors for the detail view to be safe
+            WebDriverWait(self.driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[name='name'], textarea.o_input#name_0"))
             )
-            self.log("Odoo: Connection and interactivity verified.")
             
-            # Reset to main view
+            self.log("Odoo: Khả năng tương tác đã được xác minh.")
             self.driver.get(self.initial_url)
             time.sleep(5)
             return True
-        except Exception:
-            self.log("Critical: Odoo interactive check failed. Stopping process.")
+            
+        except Exception as e:
+            self.log(f"Nghiêm trọng: Bị kẹt tại bước Xác minh -> {str(e)}")
+            # Take a screenshot if you have the capability to check why it's stuck
             return False
 
+    def like_recent_post(self):
+        """Scrolls the post into view and clicks the Like button."""
+        try:
+            self.log("Facebook: Đang tìm kiếm bài viết để like...")
+            
+            # 1. Find the buttons first (without scrolling yet)
+            like_xpath = "//div[(contains(@aria-label, 'Like') or contains(@aria-label, 'Thích')) and @role='button']"
+            like_buttons = self.driver.find_elements(By.XPATH, like_xpath)
+            
+            if like_buttons:
+                target_button = like_buttons[0]
+                
+                # 2. Use JS to scroll the specific button into the center of the screen
+                # 'block: center' prevents it from being hidden behind sticky headers
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
+                    target_button
+                )
+                
+                # 3. Brief pause to let the smooth scroll finish so you can see it
+                time.sleep(2)
+
+                # 4. Check state and click
+                is_liked = target_button.get_attribute("aria-pressed") == "true"
+                
+                if not is_liked:
+                    self.driver.execute_script("arguments[0].click();", target_button)
+                    self.log("Thành công: Đã cuộn tới bài viết và nhấn like.")
+                    time.sleep(random.uniform(1.5, 3.0))
+                else:
+                    self.log("Trạng thái: Bài viết hiển thị và đã được like.")
+            else:
+                # If no buttons found, do a small safety scroll to trigger lazy loading
+                self.driver.execute_script("window.scrollBy(0, 500);")
+                self.log("Cảnh báo: Không tìm thấy nút Like. Đã cuộn xuống để tải thêm.")
+                
+        except Exception as e:
+            self.log(f"Lỗi Like: {str(e)}")
+
+    def send_fb_message(self, text):
+        """Targets Messenger with a single bulk paste for speed and reliability."""
+        try:
+            # 1. Locate and Scroll to Message Button
+            msg_btn_xpath = "//div[@aria-label='Message'] | //div[@aria-label='Nhắn tin'] | //div[@role='button'][contains(., 'Message')]"
+            msg_btn = WebDriverWait(self.driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH, msg_btn_xpath))
+            )
+            
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", msg_btn)
+            time.sleep(1)
+            msg_btn.click()
+            self.log("Messenger: Đang mở cửa sổ chat...")
+            
+            # 2. Wait for the textbox
+            input_selector = 'div[role="textbox"][aria-placeholder="Aa"], div[aria-label="Message"], div[aria-label="Tin nhắn"]'
+            chat_input = WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, input_selector))
+            )
+            
+            # 3. Bulk Paste Logic
+            chat_input.click()
+            time.sleep(1)
+            
+            # Copy the whole message from your file to the clipboard
+            pyperclip.copy(text)
+            
+            # Select all (to clear any residue) and Paste
+            chat_input.send_keys(Keys.CONTROL, "a")
+            chat_input.send_keys(Keys.BACKSPACE)
+            chat_input.send_keys(Keys.CONTROL, "v")
+            
+            # Brief pause to let the UI register the paste before hitting Enter
+            time.sleep(1.5)
+            chat_input.send_keys(Keys.ENTER)
+            
+            self.log("Thành công: Đã dán và gửi tin nhắn.")
+            time.sleep(3) 
+        except Exception as e:
+            self.log(f"Lỗi Messenger: {str(e)}")
+            try:
+                webdriver.ActionChains(self.driver).send_keys(Keys.ENTER).perform()
+            except: pass
+
+    def construct_random_message(self):
+        """Picks 1 random line from 1 of the 9 files. Returns None on empty content."""
+        all_texts = [content for row in self.matrix for content in row]
+        
+        if not all_texts:
+            self.log("Lỗi: Ma trận tin nhắn hoàn toàn trống.")
+            return None
+
+        chosen_content = random.choice(all_texts)
+        
+        if not chosen_content or not chosen_content.strip():
+            self.log("Lỗi: Ô/file tin nhắn được chọn bị trống.")
+            return None
+        
+        lines = [l.strip() for l in chosen_content.split('\n') if l.strip()]
+        
+        if not lines:
+            self.log("Lỗi: File được chọn không chứa dòng hợp lệ nào.")
+            return None
+            
+        return chosen_content.strip()
+    
+    def capture_screenshot(self):
+        """Captures the current screen and returns the absolute path."""
+        try:
+            log_dir = "fb_screenshots"
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            file_path = os.path.abspath(f"{log_dir}/FB_{timestamp}.png")
+            self.driver.save_screenshot(file_path)
+            self.log(f"Hệ thống: Đã chụp màn hình tại {file_path}")
+            return file_path
+        except Exception as e:
+            self.log(f"Lỗi chụp màn hình: {str(e)}")
+            return None
+
+    def paste_image_to_clipboard(self, file_path):
+        """Converts file to DIB format so Windows treats it as an image, not a file."""
+        try:
+            image = Image.open(file_path)
+            output = BytesIO()
+            image.convert("RGB").save(output, "BMP")
+            data = output.getvalue()[14:]  # Remove BMP header
+            output.close()
+
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+            win32clipboard.CloseClipboard()
+            return True
+        except Exception as e:
+            self.log(f"Lỗi Clipboard: {str(e)}")
+            return False
+        
+    def handle_b2c_quick_note(self, file_path):
+        """Standalone handler for B2C KYC Image paste."""
+        try:
+            self.driver.switch_to.window(self.odoo_tab)
+            
+            # 1. Prepare Clipboard
+            if not self.paste_image_to_clipboard(file_path):
+                return False
+
+            # 2. Target the KYC Image Editor Div
+            # Odoo 19 uses 'note-editable' inside the field wrapper
+            self.log("Odoo B2C: Đang nhắm tới trường ảnh KYC...")
+            kyc_editor = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[name="x_kyc_image"] div.note-editable'))
+            )
+            
+            # 3. Direct Click & Paste (WhatsApp Style)
+            kyc_editor.click()
+            time.sleep(1)
+            kyc_editor.send_keys(Keys.CONTROL, "v")
+            
+            # CRITICAL: B2C needs time to process the image upload
+            self.log("Odoo B2C: Đã dán ảnh. Đang chờ xử lý 6s...")
+            time.sleep(6) 
+
+            # 4. Handle the text Note field
+            note_editor = self.driver.find_element(By.CSS_SELECTOR, 'div[name="note"] div.note-editable')
+            note_editor.click()
+            note_editor.send_keys(Keys.CONTROL, "a", Keys.DELETE)
+            note_editor.send_keys("Đã gửi tin nhắn")
+            
+            # 5. Save the Quick Note
+            save_btn = self.driver.find_element(By.XPATH, '//button[@name="action_save"]')
+            self.driver.execute_script("arguments[0].click();", save_btn)
+            self.log("Odoo B2C: Ghi chú nhanh đã lưu. Đang chờ giao diện tải lại...")
+            
+            # Wait for the Quick Note modal/overlay to actually disappear
+            time.sleep(4) 
+
+            # 6. Re-find the Card to hit 'Qualified'
+            # We target the card that has the specific record class
+            self.log("Odoo B2C: Đang nhắm mục tiêu lại thẻ Kanban...")
+            try:
+                # Target the article directly. If there are multiple, we take the first one 
+                # (which is usually the one we just edited in Odoo's Kanban)
+                kanban_card = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.o_kanban_record"))
+                )
+
+                # Scroll into view to ensure it's loaded in the DOM properly
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", kanban_card)
+                time.sleep(1)
+
+                # Use JS Click to bypass any invisible 'o_loading' or modal-backdrop divs
+                self.driver.execute_script("arguments[0].click();", kanban_card)
+                self.log("Odoo B2C: Đã click vào thẻ qua JS.")
+            
+            except Exception as card_err:
+                self.log(f"B2C: Click thẻ thất bại, đang thử tải lại... {str(card_err)}")
+                self.driver.refresh()
+                time.sleep(5)
+                # Try clicking again after refresh
+                kanban_card = self.driver.find_element(By.CSS_SELECTOR, "article.o_kanban_record")
+                self.driver.execute_script("arguments[0].click();", kanban_card)
+
+            # 7. Move to Qualified
+            time.sleep(2)
+            qualified_btn = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[@data-value='2' or contains(., 'Qualified')]"))
+            )
+            self.driver.execute_script("arguments[0].click();", qualified_btn)
+            self.log("Odoo B2C: Trạng thái đã cập nhật thành Qualified.")
+            
+            self.queue_count -= 1
+            self.log(f"Hệ thống: Đã xử lý thẻ. Còn lại {self.queue_count} trong bộ nhớ phiên.")
+            return True
+
+        except Exception as e:
+            self.log(f"B2C Thất bại: {str(e)}")
+            return False
+        
+    def handle_odoo_logging(self, file_path):
+        """Refocused logging using the specific composer textarea structure."""
+        try:
+            self.driver.switch_to.window(self.odoo_tab)
+            
+            # 1. Open Log Note
+            log_tab_xpath = "//button[contains(@class, 'o-mail-Chatter-logNote') or contains(., 'Log note')]"
+            log_tab = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, log_tab_xpath))
+            )
+            self.driver.execute_script("arguments[0].click();", log_tab)
+            time.sleep(1)
+
+            # 2. Upload file
+            chatter_input = self.driver.find_element(By.CSS_SELECTOR, ".o-mail-Composer input.o_input_file")
+            chatter_input.send_keys(file_path)
+            self.log("Odoo: Đang tải lên ảnh chụp màn hình...")
+            
+            # # 3. Wait for the 'Attachment Card' to appear
+            # # WebDriverWait(self.driver, 15).until(
+            # #     EC.presence_of_element_located((By.CSS_SELECTOR, ".o-mail-AttachmentCard"))
+            # # )
+            # # self.log("Odoo: Attachment processed.")
+
+            # 4. THE FIX: Re-click the specific input box and wait 5s
+            # We target the textarea that IS NOT disabled (the real input)
+            real_input_selector = "textarea.o-mail-Composer-input:not([disabled])"
+            composer_textarea = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, real_input_selector))
+            )
+            
+            self.log("Odoo: Đang định vị lại trình soạn thảo và chờ 5s...")
+            composer_textarea.click()
+            time.sleep(5) # Your requested wait time for stability
+
+            # 5. Perform Ctrl + Enter
+            self.log("Odoo: Đang gửi lệnh Ctrl + Enter...")
+            actions = webdriver.ActionChains(self.driver)
+            actions.key_down(Keys.CONTROL).send_keys(Keys.ENTER).key_up(Keys.CONTROL).perform()
+            
+            # 6. Fallback: If it's STILL there, click the physical Log button
+            time.sleep(3)
+            send_btns = self.driver.find_elements(By.XPATH, "//button[@aria-label='Log']")
+            if send_btns and send_btns[0].is_displayed():
+                self.log("Odoo: Phím tắt không chạy, đang nhấn nút Log thủ công...")
+                self.driver.execute_script("arguments[0].click();", send_btns[0])
+
+            # 7. Move to 'Qualified'
+            time.sleep(4) 
+            self.log("Odoo: Đang chuyển sang giai đoạn Qualified...")
+            qualified_btn = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[@data-value='2' or contains(., 'Qualified')]"))
+            )
+            self.driver.execute_script("arguments[0].click();", qualified_btn)
+            
+            time.sleep(3)
+            self.queue_count -= 1
+            self.log(f"Hệ thống: Đã xử lý thẻ. Còn lại {self.queue_count} trong bộ nhớ phiên.")
+            return True
+
+        except Exception as e:
+            self.log(f"Lỗi Logging Odoo: {str(e)}")
+            return False
+
+    def check_queue_status(self):
+        """Checks if the 'New' column has any cards left using aria-valuemax."""
+        try:
+            # 1. Target the 'New' column specifically by finding the header text first
+            new_column_xpath = "//div[contains(@class, 'o_kanban_group')][.//span[text()='New']]"
+            new_column = self.driver.find_element(By.XPATH, new_column_xpath)
+            
+            # 2. Find the progress bar within that column
+            try:
+                progress_bar = new_column.find_element(By.CSS_SELECTOR, "div[role='progressbar']")
+                count_str = progress_bar.get_attribute("aria-valuemax")
+                count = int(count_str) if count_str else 0
+                
+                if count <= 0:
+                    self.log("Hệ thống: Hàng đợi trống (số lượng là 0). Đang dừng ứng dụng.")
+                    return False # Stop
+                
+                self.log(f"Hệ thống: Còn {count} thẻ trong hàng đợi 'Mới'.")
+                return True # Continue
+                
+            except Exception:
+                # If progress bar is missing, it usually means 0 records in Odoo
+                self.log("Hệ thống: Không tìm thấy thanh tiến trình. Giả định hàng đợi trống.")
+                return False
+                
+        except Exception as e:
+            self.log(f"Lỗi kiểm tra hàng đợi: {str(e)}")
+            return True # Continue on error to avoid false stops
+        
     def run(self):
         if not self.initialize_driver(): return
-        
-        # Initial Verification phase
         if not self.verify_initial_access():
-            self.log("System: Stopping process due to connection issues.")
             self.driver.quit()
             return
 
@@ -117,122 +556,100 @@ class FacebookScraper:
                 continue
 
             try:
-                # --- STEP 1: GRAB LINK FROM ODOO ---
                 self.driver.switch_to.window(self.odoo_tab)
                 self.check_odoo_connection()
+                fb_link = None
                 
-                self.log("Odoo: Locating first Kanban card...")
-                quick_note_btn = WebDriverWait(self.driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, 'a.oe_kanban_action[data-tooltip="Quick note"]'))
-                )
-                self.driver.execute_script("arguments[0].click();", quick_note_btn)
-                time.sleep(3)
+                # Identify site for logic branching
+                is_demo_site = "yingbo_demo.sge.vn" in self.driver.current_url
 
-                # Find the link inside the Website (B2B) widget
-                fb_link_element = WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[name='x_website'] a"))
-                )
-                fb_link = fb_link_element.get_attribute("href")
-                
+                # --- STEP 1: GET FB LINK ---
+                # B2C site logic: Try Quick Note first
+                if not is_demo_site:
+                    try:
+                        self.log("Odoo (B2C): Đang thử lấy dữ liệu từ Ghi chú nhanh...")
+                        quick_note_btn = WebDriverWait(self.driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, 'a.oe_kanban_action[data-tooltip="Quick note"]'))
+                        )
+                        self.driver.execute_script("arguments[0].click();", quick_note_btn)
+                        time.sleep(2)
+                        fb_link_el = self.driver.find_elements(By.CSS_SELECTOR, "div[name='x_website'] a")
+                        if fb_link_el:
+                            fb_link = fb_link_el[0].get_attribute("href")
+                    except Exception:
+                        pass
+
+                # Demo site logic (or fallback for B2C): Use Form View
                 if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
-                    self.log(f"Warning: Invalid link '{fb_link}'. Resetting...")
+                    self.log("Odoo: Đang điều hướng tới Form View để lấy link...")
+                    kanban_card = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "article.o_kanban_record"))
+                    )
+                    self.driver.execute_script("arguments[0].click();", kanban_card)
+                    time.sleep(4)
+
+                    fb_input_xpath = "//input[@id='x_url_fb_profile_0']"
+                    fb_input = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.XPATH, fb_input_xpath))
+                    )
+                    fb_link = fb_input.get_attribute("value")
+
+                # --- STEP 2: FACEBOOK ACTIONS ---
+                if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
+                    self.log(f"Cảnh báo: Không có link FB hợp lệ. Đang bỏ qua.")
                     self.driver.get(self.initial_url)
                     time.sleep(5)
+                    self.clear_odoo_filters() # Kept as requested
                     continue
 
-                self.log(f"Odoo: Target found -> {fb_link}")
-
-                # --- STEP 2: OPEN NEW TAB WITH DIRECT LINK ---
                 self.driver.execute_script(f"window.open('{fb_link}', '_blank');")
                 time.sleep(2)
                 fb_tab = self.driver.window_handles[-1]
                 self.driver.switch_to.window(fb_tab)
                 
-                self.log("Facebook: Navigating to profile...")
-                time.sleep(5) # Wait for profile to load
-
-                # --- STEP 3: MESSAGE LOGIC ---
-                # Inside your run(self) loop:
+                self.log(f"Facebook: Đang truy cập {fb_link}")
+                time.sleep(5) 
+                self.like_recent_post()
+                
                 msg = self.construct_random_message()
-
                 if msg:
-                    self.log(f"Action: Sending message...")
                     self.send_fb_message(msg)
-                else:
-                    self.log("Action: Skipping message send due to empty content error.")
-                    # You might want to 'continue' the loop here to try the next one
+                    time.sleep(2)
 
-                # --- STEP 4: CLEANUP ---
-                self.driver.close() # Close the Facebook tab
+                screenshot_path = self.capture_screenshot() 
+                self.driver.close()
                 self.driver.switch_to.window(self.odoo_tab)
-                self.driver.get(self.initial_url) # Reset Odoo view
-                time.sleep(5)
+                
+                # --- STEP 3: ODOO LOGGING (FLIPPED LOGIC) ---
+                if screenshot_path:
+                    if is_demo_site:
+                        # Demo site = handle_odoo_logging
+                        self.log("Odoo: Trang demo -> Sử dụng Log Note chuẩn.")
+                        self.handle_odoo_logging(screenshot_path)
+                    else:
+                        # B2C site = handle_b2c_quick_note
+                        self.log("Odoo: Trang B2C -> Sử dụng dán Ghi chú nhanh.")
+                        self.handle_b2c_quick_note(screenshot_path)
 
-            except Exception as e:
-                self.log(f"Cycle Error: {str(e)}")
-                self.driver.switch_to.window(self.odoo_tab)
+                # --- STEP 4: RESET ---
+                self.log("Odoo: Đang quay lại Pipeline...")
                 self.driver.get(self.initial_url)
                 time.sleep(5)
+                self.clear_odoo_filters() # Kept as requested
 
-        self.driver.quit()
+                # --- NEW: MANUAL COUNT CHECK ---
+                if self.queue_count <= 0:
+                    self.log("Hệ thống: Bộ đếm thủ công đạt mức 0. Tất cả thẻ đã xử lý xong.")
+                    self.stop_event.set()
+                    continue
 
-    def send_fb_message(self, text):
-        """Targets the specific Messenger chatbox and avoids post comments."""
-        try:
-            # 1. Click the 'Message' button to ensure the chat window is active
-            msg_btn = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[@aria-label='Message'] | //div[@aria-label='Nhắn tin']"))
-            )
-            msg_btn.click()
-            self.log("Messenger: Chat window activated.")
-            time.sleep(3)
+            except Exception as e:
+                self.log(f"Lỗi chu kỳ: {str(e)}")
+                try:
+                    self.driver.switch_to.window(self.odoo_tab)
+                    self.driver.get(self.initial_url)
+                    self.clear_odoo_filters()
+                except: pass
+                time.sleep(5)
 
-            # 2. Locate the Messenger-specific textbox using the 'Aa' placeholder
-            # This distinguishes it from the 'Viết bình luận...' comment box
-            chat_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="textbox"][aria-placeholder="Aa"]'))
-            )
-            
-            # 3. Focus and Send
-            chat_input.click()
-            time.sleep(1)
-            
-            # Type and Enter
-            chat_input.send_keys(text)
-            time.sleep(1)
-            chat_input.send_keys(Keys.ENTER)
-            
-            self.log(f"Success: Message sent to Messenger.")
-            time.sleep(2) 
-            
-        except Exception as e:
-            self.log(f"Messenger Error: Could not isolate chatbox. -> {str(e)}")
-
-    def construct_random_message(self):
-        """
-        Picks 1 random text from the 9 files. 
-        Returns an error/log if a file or the selected text is empty.
-        """
-        # 1. Flatten the 3x3 matrix into a single list of 9 items
-        all_texts = [content for row in self.matrix for content in row]
-        
-        if not all_texts:
-            self.log("Error: The message matrix is completely empty.")
-            return None
-
-        # 2. Pick one random file content
-        chosen_content = random.choice(all_texts)
-        
-        # Check if the chosen file content is just whitespace or empty
-        if not chosen_content or not chosen_content.strip():
-            self.log("Error: The selected message file is empty.")
-            return None
-        
-        # 3. Pick one random non-empty line from that specific file
-        lines = [l.strip() for l in chosen_content.split('\n') if l.strip()]
-        
-        if not lines:
-            self.log("Error: The selected file contains no valid lines of text.")
-            return None
-            
-        return random.choice(lines)
+        # self.driver.quit()
