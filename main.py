@@ -37,12 +37,13 @@ INPUT = "#242938"
 # =========================================================
 
 class TextEditor(tk.Toplevel):
-    def __init__(self, parent, file_path, title):
+    def __init__(self, parent, file_path, title, on_save_callback=None):
         super().__init__(parent)
         self.file_path = file_path
         self.title(f"Đang chỉnh sửa • {title}")
         self.geometry("580x620")
         self.configure(bg=BG)
+        self.on_save_callback = on_save_callback
 
         self.initial_content = ""
         if os.path.exists(file_path):
@@ -96,8 +97,6 @@ class TextEditor(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    
-
     def create_button(self, parent, text, color, command):
         return tk.Button(
             parent,
@@ -121,6 +120,10 @@ class TextEditor(tk.Toplevel):
             with open(self.file_path, "w", encoding="utf-8") as f:
                 f.write(content)
             self.initial_content = content
+            
+            if self.on_save_callback:
+                self.on_save_callback(self.file_path)
+                
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể lưu tệp:\n{e}")
 
@@ -147,13 +150,16 @@ class MacroApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FB Messenger Macro")
-        self.root.geometry("1180x720")
-        self.root.minsize(1250, 720)
+        self.root.geometry("1450x720")
+        self.root.minsize(1450, 720)
         self.root.configure(bg=BG)
 
         self.scraper_thread = None
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
+        
+        # FIXED: Tracking dictionary instantiated inside the correct class
+        self.preview_labels = {} 
 
         self.setup_style()
         self.setup_ui()
@@ -166,12 +172,12 @@ class MacroApp:
         overlay.geometry("650x350")
         overlay.configure(bg=CARD)
         overlay.resizable(False, False)
-        overlay.transient(self.root) # Luôn nằm trên cửa sổ chính
-        overlay.grab_set() # Khóa tương tác với cửa sổ chính cho đến khi đóng pop-up
+        overlay.transient(self.root) 
+        overlay.grab_set() 
 
         # Center pop-up
         self.root.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 250
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 325  # Fixed: Centered overlay calculations properly
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
         overlay.geometry(f"+{x}+{y}")
 
@@ -181,10 +187,10 @@ class MacroApp:
         ).pack(pady=(20, 10))
 
         msg = (
-            "Script sử dụng Profile Edge hiện tại của bạn. Trước khi bắt đầu script, hãy:\n\n"
-            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên Edge để đảm bảo độ mượt.\n"
-            "• Dăng nhập đúng tài khoản Facebook trước trên Edge.\n"
-            "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n\n"
+            "Script sử dụng Profile Edge hiện tại của bạn. Trước khi bắt đầu script, hãy:\n\n"
+            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên Edge để đảm bảo độ mượt.\n"
+            "• Đăng nhập đúng tài khoản Facebook trước trên Edge.\n"
+            "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n\n"
             "Lưu ý: Đây là phiên bản Demo."
         )
 
@@ -284,16 +290,20 @@ class MacroApp:
         # MAIN LAYOUT
         main = tk.Frame(self.root, bg=BG)
         main.pack(fill="both", expand=True, padx=25, pady=(5, 25))
-        main.grid_columnconfigure(0, weight=1)
-        main.grid_columnconfigure(1, weight=1)
+        main.grid_columnconfigure(0, weight=0, minsize=340)  # Activity logs panel
+        main.grid_columnconfigure(1, weight=0, minsize=340)
         main.grid_columnconfigure(2, weight=1)
 
         # LEFT COLUMN (LOGS)
         left = tk.Frame(main, bg=BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        self.create_section_title(left, "Nhật ký hoạt động")
-        log_card = self.create_card(left)
-        log_card.pack(fill="both", expand=True)
+        self.create_section_title(left, "Log")
+        # 1. FIX: Set the explicit width right here when creating the Frame container
+        log_card = tk.Frame(left, bg=CARD, highlightthickness=1, highlightbackground="#2a3042", width=340)
+        
+        # 2. FIX: Remove 'width=260' from pack() so it doesn't crash Tkinter
+        log_card.pack(fill="y", side="left", expand=False) 
+        log_card.pack_propagate(False) # Keeps the text box inside from inflating it
 
         self.log_widget = ScrolledText(
             log_card,
@@ -308,6 +318,10 @@ class MacroApp:
             pady=15
         )
         self.log_widget.pack(fill="both", expand=True)
+
+        # Nếu bạn muốn dòng chữ "Trực quan hóa hoạt động" xuất hiện ngay từ đầu:
+        self.log_widget.insert(tk.END, "➜ Trực quan hóa hoạt động\n")
+        self.log_widget.config(state=tk.DISABLED)  # Khóa lại sau khi chèn xong
 
         # CENTER COLUMN (SETUP)
         center = tk.Frame(main, bg=BG)
@@ -383,9 +397,10 @@ class MacroApp:
         grid_container = tk.Frame(matrix_card, bg=CARD)
         grid_container.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # FIX 1: Configure both rows and columns to share expanding space uniformly
         for i in range(3):
             grid_container.grid_columnconfigure(i, weight=1, uniform="col")
-            grid_container.grid_rowconfigure(i, minsize=120)
+            grid_container.grid_rowconfigure(i, weight=1, uniform="row") # Added weight=1 and uniform="row"
             
         file_idx = 0
         for r in range(3):
@@ -403,28 +418,49 @@ class MacroApp:
                 if not preview_text: preview_text = "(trống)"
                 preview_text = preview_text[:120]
 
-                cell = tk.Frame(
-                    grid_container, bg=CARD_2, highlightthickness=1,
-                    highlightbackground="#32384d", cursor="hand2", height=120
-                )
-                cell.grid(row=r, column=c, sticky="ew", padx=6, pady=6)
+                cell = tk.Frame(grid_container, bg=CARD_2, highlightthickness=1, highlightbackground="#32384d", cursor="hand2")
+                cell.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
                 cell.grid_propagate(False)
+                cell.pack_propagate(False) # <--- ADD THIS: Stops inner widgets from expanding the frame
+                
                 cell.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
 
                 top = tk.Frame(cell, bg=CARD_2)
                 top.pack(fill="x", padx=10, pady=(10, 0))
                 tk.Label(top, text=file_name, bg=CARD_2, fg=TEXT, font=("Segoe UI Semibold", 10)).pack(anchor="w")
 
+                # REMOVE fixed wraplength=120 here
                 preview = tk.Label(
                     cell, text=preview_text, bg=CARD_2, fg=SUBTEXT,
-                    justify="left", anchor="nw", wraplength=120, font=("Segoe UI", 8)
+                    justify="left", anchor="nw", font=("Segoe UI", 8)
                 )
                 preview.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
                 preview.pack(fill="both", expand=True, padx=10, pady=10)
+                
+                # MAGIC TRICK: Dynamically adjust wrap length to match the physical width of the frame
+                cell.bind("<Configure>", lambda e, lbl=preview: lbl.config(wraplength=e.width - 20))
+                
+                self.preview_labels[path] = preview
+                
                 file_idx += 1
 
+    def refresh_grid(self, path):
+        """Reads the updated file and refreshes its respective label on the grid."""
+        if path in self.preview_labels:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+            except Exception:
+                content = ""
+            
+            if not content:
+                content = "(trống)"
+                
+            preview_text = content[:120] 
+            self.preview_labels[path].config(text=preview_text) 
+
     def open_editor(self, path, name):
-        TextEditor(self.root, path, name)
+        TextEditor(self.root, path, name, on_save_callback=self.refresh_grid)
 
     def log_message(self, message):
         def append():

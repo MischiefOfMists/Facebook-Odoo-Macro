@@ -193,43 +193,76 @@ class FacebookScraper:
             return False
 
     def like_recent_post(self):
-        """Scrolls the post into view and clicks the Like button."""
+        """Scrolls the post into view and clicks the Like button if not already liked."""
         try:
             self.log("Facebook: Đang tìm kiếm bài viết để like...")
             
-            # 1. Find the buttons first (without scrolling yet)
-            like_xpath = "//div[(contains(@aria-label, 'Like') or contains(@aria-label, 'Thích')) and @role='button']"
+            # 1. STRATEGY: Match EXACT labels to completely filter out "Gỡ Thích" (Already Liked)
+            like_xpath = "//div[(@aria-label='Thích' or @aria-label='Like') and @role='button']"
             like_buttons = self.driver.find_elements(By.XPATH, like_xpath)
             
             if like_buttons:
                 target_button = like_buttons[0]
                 
                 # 2. Use JS to scroll the specific button into the center of the screen
-                # 'block: center' prevents it from being hidden behind sticky headers
                 self.driver.execute_script(
                     "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
                     target_button
                 )
                 
-                # 3. Brief pause to let the smooth scroll finish so you can see it
+                # 3. Brief pause to let the smooth scroll finish
                 time.sleep(2)
 
-                # 4. Check state and click
-                is_liked = target_button.get_attribute("aria-pressed") == "true"
+                # 4. Execute click action since the selector only finds unliked states
+                self.driver.execute_script("arguments[0].click();", target_button)
+                self.log("Thành công: Đã cuộn tới bài viết và nhấn like.")
+                time.sleep(random.uniform(1.5, 3.0))
                 
-                if not is_liked:
-                    self.driver.execute_script("arguments[0].click();", target_button)
-                    self.log("Thành công: Đã cuộn tới bài viết và nhấn like.")
-                    time.sleep(random.uniform(1.5, 3.0))
-                else:
-                    self.log("Trạng thái: Bài viết hiển thị và đã được like.")
             else:
-                # If no buttons found, do a small safety scroll to trigger lazy loading
-                self.driver.execute_script("window.scrollBy(0, 500);")
-                self.log("Cảnh báo: Không tìm thấy nút Like. Đã cuộn xuống để tải thêm.")
+                # If no unliked buttons are found, check if a "Gỡ Thích" button is visible instead
+                already_liked_xpath = "//div[(@aria-label='Gỡ Thích' or @aria-label='Remove Like') and @role='button']"
+                if self.driver.find_elements(By.XPATH, already_liked_xpath):
+                    self.log("Trạng thái: Bài viết đã được thích từ trước (Gỡ Thích). Bỏ qua bước này.")
+                else:
+                    # If absolutely nothing is found, trigger a lazy load scroll
+                    self.driver.execute_script("window.scrollBy(0, 500);")
+                    self.log("Cảnh báo: Không tìm thấy nút tương tác nào. Đã cuộn xuống thêm.")
                 
         except Exception as e:
             self.log(f"Lỗi Like: {str(e)}")
+
+    def close_active_chats(self):
+        """Finds and clicks the close 'X' button on any active chat windows."""
+        self.log("Đang dọn dẹp các cửa sổ chat đang mở...")
+        try:
+            # Facebook often groups chat tabs using role='start' or a general container layout.
+            # We look for the close button via common accessible aria-labels or SVG structures.
+            close_buttons = self.driver.find_elements(
+                "xpath", 
+                "//div[@aria-label='Đóng đoạn chat' or @aria-label='Close chat' or @aria-label='Close']"
+            )
+            
+            if not close_buttons:
+                # Fallback: Find buttons inside the floating chat layout by looking for the small X icon
+                close_buttons = self.driver.find_elements(
+                    "xpath",
+                    "//div[contains(@data-pagelet, 'ChatTab')]//div[@role='button']//i[contains(@class, 'x')]"
+                )
+
+            if close_buttons:
+                self.log(f"Tìm thấy {len(close_buttons)} cửa sổ chat đang mở. Đang tiến hành đóng.")
+                for btn in close_buttons:
+                    try:
+                        # Force click via JavaScript execution to prevent 'ElementClickInterceptedException'
+                        self.driver.execute_script("arguments[0].click();", btn)
+                        self.time.sleep(0.5) # Short grace time for animation closure
+                    except Exception as e:
+                        pass # Ignore if an individual button action fails or vanishes mid-loop
+            else:
+                self.log("Không phát hiện cửa sổ chat nào đang mở.")
+                
+        except Exception as e:
+            self.log(f"Cảnh báo trong quá trình dọn dẹp chat: {str(e)}")
 
     def send_fb_message(self, text):
         """Targets Messenger with a single bulk paste for speed and reliability."""
@@ -572,6 +605,10 @@ class FacebookScraper:
                 
                 self.log(f"Facebook: Đang truy cập {fb_link}")
                 time.sleep(5) 
+
+                self.close_active_chats() 
+                time.sleep(1)
+
                 self.like_recent_post()
                 
                 msg = self.construct_random_message()
@@ -580,6 +617,8 @@ class FacebookScraper:
                     time.sleep(2)
 
                 screenshot_path = self.capture_screenshot() 
+                time.sleep(3)
+
                 self.driver.close()
                 self.driver.switch_to.window(self.odoo_tab)
                 
