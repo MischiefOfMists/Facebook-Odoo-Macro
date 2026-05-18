@@ -13,9 +13,12 @@ from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.edge.options import Options as EdgeOptions
 
 class FacebookScraper:
-    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root):
+    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None):
         self.queue_count = 0
         self.matrix = matrix 
         
@@ -35,8 +38,140 @@ class FacebookScraper:
         self.driver = None
         self.odoo_tab = None
         self.root = root
-        self.is_running = False # (Your patch)
+        
+        # 4. Custom Browser Configuration
+        self.browser = browser
+        self.exe_path = exe_path
+        self.profile_path = profile_path
+        
+        self.is_running = False
+        
+    def init_driver(self):
+        """Initializes the correct browser engine based on UI selection."""
+        # Import thư viện gốc ngay đầu hàm để tránh lỗi cục bộ (Local Variable Error)
+        from selenium import webdriver
+        import os
+        import time
+        import subprocess
+        
+        # 1. Close and clean up background tasks depending on the chosen platform
+        if self.browser != "LibreWolf":
+            self.close_all_edge_instances()
+        else:
+            try:
+                self.log("Hệ thống: Đang dọn dẹp các tiến trình LibreWolf cũ...")
+                subprocess.run(["taskkill", "/F", "/IM", "librewolf.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(2)
+            except Exception:
+                pass
 
+        # 2. LAUNCH LIBREWOLF ROUTINE
+        if self.browser == "LibreWolf":
+            self.log("Đang cấu hình trình duyệt LibreWolf...")
+            
+            from selenium.webdriver.firefox.service import Service as FirefoxService
+            from webdriver_manager.firefox import GeckoDriverManager
+            
+            # Sử dụng lớp Options tổng quát để cấu hình trực tiếp nhằm vượt qua lỗi nạp module
+            from selenium.webdriver.common.options import ArgOptions
+            options = ArgOptions()
+            options.set_capability("browserName", "firefox")
+            
+            import sys
+            if hasattr(sys, '_MEIPASS'):
+                root_dir = os.path.dirname(sys.executable)
+            else:
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                root_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "core" else current_dir
+
+            # --- GIỮ NGUYÊN ĐƯỜNG DẪN MẶC ĐỊNH CỦA BRO ---
+            librewolf_path = os.path.join(root_dir, "LibreWolf", "librewolf.exe")
+            profile_path = os.path.join(root_dir, "Profiles", "Default")
+            
+            # --- CODE THÊM MỚI: Ghi đè nếu có đường dẫn tùy chỉnh từ UI ---
+            if hasattr(self, 'exe_path') and self.exe_path and self.exe_path != "Default":
+                librewolf_path = self.exe_path
+                
+            if hasattr(self, 'profile_path') and self.profile_path and self.profile_path != "Default":
+                profile_path = self.profile_path
+            # -------------------------------------------------------------
+            
+            self.log(f"Hệ thống: Đường dẫn LibreWolf chính xác -> {librewolf_path}")
+            self.log(f"Hệ thống: Đường dẫn Hồ sơ chính xác -> {profile_path}")
+
+            # Đóng gói cấu hình nhị phân và profile trực tiếp vào capabilities
+            options.set_capability("moz:firefoxOptions", {
+                "binary": librewolf_path,
+                "args": ["-profile", profile_path],
+                "prefs": {
+                    "dom.webdriver.enabled": False,
+                    "useAutomationExtension": False
+                }
+            })
+            
+            try:
+                # 1. Tải và định vị chính xác đường dẫn Driver thực thi cục bộ
+                driver_path = GeckoDriverManager().install()
+                service = FirefoxService(executable_path=driver_path)
+                
+                # 2. KHỞI ĐỘNG TIẾN TRÌNH GECKODRIVER NGẦM
+                service.start()
+                
+                # 3. KHỞI TẠO ĐỐI TƯỢNG DRIVER THEO CHUẨN SELENIUM MỚI
+                from selenium.webdriver.remote.webdriver import WebDriver as BaseWebDriver
+                
+                # Đưa chuỗi url dịch vụ vào command_executor VÀ truyền service để duy trì vòng đời
+                self.driver = BaseWebDriver(
+                    command_executor=service.service_url, 
+                    options=options
+                )
+                
+                # Gắn chặt đối tượng service vào driver để tự động tắt sạch tiến trình khi gọi driver.quit()
+                self.driver._service = service 
+                
+                self.driver.maximize_window()
+                return True
+            except Exception as e:
+                self.log(f"Nghiêm trọng: Lỗi khởi tạo LibreWolf -> {str(e)}")
+                return False
+                
+        # 3. LAUNCH EDGE ROUTINE
+        else:
+            self.log("Đang cấu hình trình duyệt Microsoft Edge...")
+            from selenium.webdriver.edge.options import Options as EdgeOptions
+            
+            options = EdgeOptions()
+            options.add_argument("--start-maximized")
+            options.add_argument("--remote-allow-origins=*")
+            options.add_argument("--disable-restore-session-state")
+            options.add_argument("--no-first-run")
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            options.add_experimental_option('excludeSwitches', ['enable-logging'])
+            options.add_argument("--log-level=3")
+            options.add_experimental_option("detach", True)
+            
+            # --- GIỮ NGUYÊN ĐƯỜNG DẪN PROFILE MẶC ĐỊNH CỦA BRO ---
+            profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
+            
+            # --- CODE THÊM MỚI: Ghi đè nếu có đường dẫn tùy chỉnh từ UI ---
+            if hasattr(self, 'profile_path') and self.profile_path and self.profile_path != "Default":
+                profile_path = self.profile_path
+                
+            if hasattr(self, 'exe_path') and self.exe_path and self.exe_path != "Default":
+                options.binary_location = self.exe_path
+            # -------------------------------------------------------------
+
+            options.add_argument(f"--user-data-dir={profile_path}")
+            options.add_argument("--profile-directory=Default")
+            
+            try:
+                # Đã được sửa lỗi: webdriver hiện tại được gọi an toàn từ đầu hàm
+                self.driver = webdriver.Edge(options=options)
+                return True
+            except Exception as e:
+                self.log(f"Nghiêm trọng: Lỗi khởi tạo Microsoft Edge -> {str(e)}")
+                return False
+            
     def setup_session_logger(self):
         """Creates the session_logs directory and prepares a unique file for this run."""
         try:
@@ -68,7 +203,6 @@ class FacebookScraper:
                     f.write(f"{time_hook} {message}\n")
             except Exception:
                 pass # Ensures file locks or read/write collisions won't halt the automation loop
-
     def close_all_edge_instances(self):
         try:
             self.log("Hệ thống: Đang đóng Edge và thực hiện dọn dẹp tab...")
@@ -124,30 +258,6 @@ class FacebookScraper:
             self.log("Hệ thống: Các tab đã được dọn dẹp. Phiên đăng nhập được giữ lại.")
         except Exception as e:
             self.log(f"Lỗi dọn dẹp: {str(e)}")
-
-    def initialize_driver(self):
-        self.close_all_edge_instances()
-        options = Options()
-        options.add_argument("--start-maximized")
-        options.add_argument("--remote-allow-origins=*")
-        options.add_argument("--disable-restore-session-state")
-        options.add_argument("--no-first-run")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option('excludeSwitches', ['enable-logging'])
-        options.add_argument("--log-level=3")
-        options.add_experimental_option("detach", True)
-        
-        # Using the Default Edge Profile
-        profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-        options.add_argument(f"--user-data-dir={profile_path}")
-        options.add_argument("--profile-directory=Default")
-        
-        try:
-            self.driver = webdriver.Edge(options=options)
-            return True
-        except Exception as e:
-            self.log(f"Nghiêm trọng: Lỗi khởi tạo trình duyệt -> {str(e)}")
-            return False
 
     def check_odoo_connection(self):
         try:
@@ -290,29 +400,50 @@ class FacebookScraper:
         """Finds and clicks the close 'X' button on any active chat windows."""
         self.log("Đang dọn dẹp các cửa sổ chat đang mở...")
         try:
-            # Facebook often groups chat tabs using role='start' or a general container layout.
-            # We look for the close button via common accessible aria-labels or SVG structures.
-            close_buttons = self.driver.find_elements(
-                "xpath", 
-                "//div[@aria-label='Đóng đoạn chat' or @aria-label='Close chat' or @aria-label='Close']"
-            )
-            
-            if not close_buttons:
-                # Fallback: Find buttons inside the floating chat layout by looking for the small X icon
-                close_buttons = self.driver.find_elements(
-                    "xpath",
-                    "//div[contains(@data-pagelet, 'ChatTab')]//div[@role='button']//i[contains(@class, 'x')]"
-                )
+            # Khởi tạo danh sách chứa các nút tìm được
+            close_buttons = []
 
+            # TẦNG 1: Quét Xpath đặc trị dựa trên HTML thực tế của Facebook (Bắt theo data thuộc tính và SVG path)
+            # Đường dẫn này quét thẳng vào div role='button' có chứa svg dấu X độ phân giải 16x16
+            spec_buttons = self.driver.find_elements(
+                "xpath", 
+                "//div[@role='button'][@aria-label='Đóng đoạn chat' or @aria-label='Close chat'][@data-prevent_chattab_focus='1']"
+            )
+            if spec_buttons:
+                close_buttons.extend(spec_buttons)
+
+            # TẦNG 2: Fallback bằng cách định vị thẻ path vẽ dấu X đặc trưng của nút đóng FB nếu Class cha thay đổi
+            if not close_buttons:
+                path_buttons = self.driver.find_elements(
+                    "xpath",
+                    "//div[@role='button'] [./* [local-name()='svg'] /* [local-name()='path' and contains(@d, 'M13.457 3.957')]]"
+                )
+                if path_buttons:
+                    close_buttons.extend(path_buttons)
+
+            # TẦNG 3: Giữ lại các bộ quét cũ diện rộng của bro để dự phòng khi FB cập nhật layout ở luồng khác
+            if not close_buttons:
+                old_buttons = self.driver.find_elements(
+                    "xpath", 
+                    "//div[@aria-label='Đóng đoạn chat' or @aria-label='Close chat' or @aria-label='Close']"
+                )
+                if old_buttons:
+                    close_buttons.extend(old_buttons)
+
+            # TIẾN HÀNH XỬ LÝ CLICK ĐỒNG BỘ CHO ĐA TRÌNH DUYỆT (EDGE & LIBREWOLF)
             if close_buttons:
+                # Loại bỏ trùng lặp nếu các tầng quét trùng element
+                close_buttons = list(set(close_buttons))
+                
                 self.log(f"Tìm thấy {len(close_buttons)} cửa sổ chat đang mở. Đang tiến hành đóng.")
                 for btn in close_buttons:
                     try:
-                        # Force click via JavaScript execution to prevent 'ElementClickInterceptedException'
+                        # KHÔNG DÙNG btn.is_displayed() để tránh LibreWolf chặn nhầm các thẻ có style phức tạp.
+                        # Ép kích hoạt trực tiếp từ gốc JavaScript để cả Edge và LibreWolf đều click xuyên qua lớp div shadow.
                         self.driver.execute_script("arguments[0].click();", btn)
-                        time.sleep(2)
-                    except Exception as e:
-                        pass # Ignore if an individual button action fails or vanishes mid-loop
+                        time.sleep(1) # Delay nhẹ để trình duyệt kịp giải phóng DOM cũ
+                    except Exception:
+                        pass # Bỏ qua nếu element biến mất trong quá trình vòng lặp quét
             else:
                 self.log("Không phát hiện cửa sổ chat nào đang mở.")
                 
@@ -499,63 +630,116 @@ class FacebookScraper:
         except Exception as e:
             self.log(f"B2C Thất bại: {str(e)}")
             return False
+    
+    def copy_image_to_clipboard(self, file_path):
+        """Sử dụng PowerShell hệ thống để đưa ảnh vào Clipboard (Chạy ngầm hoàn toàn không hiện Terminal)"""
+        try:
+            import subprocess
+            powershell_cmd = f"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile('{file_path}'))"
+            
+            # Sử dụng CREATE_NO_WINDOW để ép buộc ẩn cửa sổ Terminal đen popup lên màn hình
+            subprocess.run(
+                ["powershell", "-Command", powershell_cmd],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW  # 0x08000000: Ẩn terminal hoàn toàn
+            )
+            return True
+        except Exception as e:
+            self.log(f"Hệ thống: Lỗi nạp ảnh vào Clipboard -> {str(e)}")
+            return False
         
     def handle_odoo_logging(self, file_path):
-        """Refocused logging using the specific composer textarea structure."""
+        """Refocused logging using exact human-like Ctrl+V paste and dual-submit validation."""
         try:
             self.driver.switch_to.window(self.odoo_tab)
             
-            # 1. Open Log Note
-            log_tab_xpath = "//button[contains(@class, 'o-mail-Chatter-logNote') or contains(., 'Log note')]"
+            # 1. Kích hoạt mở tab Log Note (Ghi chú)
+            log_tab_xpath = (
+                "//button[contains(@class, 'o-mail-Chatter-logNote')]"
+                "|//button[contains(@class, 'o_Chatter_buttonLogNote')]"
+                "|//button[contains(text(), 'Log note')]"
+                "|//button[contains(text(), 'Ghi chú')]"
+            )
             log_tab = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, log_tab_xpath))
             )
             self.driver.execute_script("arguments[0].click();", log_tab)
-            time.sleep(2)
+            time.sleep(1)
 
-            # 2. Upload file
-            chatter_input = self.driver.find_element(By.CSS_SELECTOR, ".o-mail-Composer input.o_input_file")
-            chatter_input.send_keys(file_path)
-            self.log("Odoo: Đang tải lên ảnh chụp màn hình...")
-            
-            # # 3. Wait for the 'Attachment Card' to appear
-            # # WebDriverWait(self.driver, 15).until(
-            # #     EC.presence_of_element_located((By.CSS_SELECTOR, ".o-mail-AttachmentCard"))
-            # # )
-            # # self.log("Odoo: Attachment processed.")
-
-            # 4. THE FIX: Re-click the specific input box and wait 5s
-            # We target the textarea that IS NOT disabled (the real input)
-            real_input_selector = "textarea.o-mail-Composer-input:not([disabled])"
+            # 2. Định vị và click vào Textarea để lấy Focus bắt buộc
+            real_input_selector = "textarea.o-mail-Composer-input"
             composer_textarea = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, real_input_selector))
             )
-            
-            self.log("Odoo: Đang định vị lại trình soạn thảo...")
-            composer_textarea.click()
-            time.sleep(random.uniform(5, 8))
+            self.driver.execute_script("arguments[0].click(); focus();", composer_textarea)
+            time.sleep(1)
 
-            # 5. Perform Ctrl + Enter
-            self.log("Odoo: Đang gửi lệnh Ctrl + Enter...")
+            # 3. Thực hiện sao chép và dán ảnh qua tổ hợp phím
+            if file_path and os.path.exists(file_path):
+                self.log("Odoo: Đang đưa ảnh vào Clipboard chạy ngầm...")
+                if self.copy_image_to_clipboard(file_path):
+                    self.log("Odoo: Đang thực hiện dán ảnh bằng Ctrl + V...")
+                    actions = webdriver.ActionChains(self.driver)
+                    actions.key_down(Keys.CONTROL).send_keys('v').key_up(Keys.CONTROL).perform()
+                    time.sleep(4)  # Chờ 4 giây cho Odoo xử lý render ảnh dán vào
+
+            # 4. ƯU TIÊN THỬ LỆNH GỬI BẰNG CTRL + ENTER TRƯỚC
+            self.log("Odoo: Thử gửi Log Note bằng phím tắt Ctrl + Enter...")
             actions = webdriver.ActionChains(self.driver)
             actions.key_down(Keys.CONTROL).send_keys(Keys.ENTER).key_up(Keys.CONTROL).perform()
-            
-            # 6. Fallback: If it's STILL there, click the physical Log button
-            time.sleep(3)
-            send_btns = self.driver.find_elements(By.XPATH, "//button[@aria-label='Log']")
-            if send_btns and send_btns[0].is_displayed():
-                self.log("Odoo: Phím tắt không chạy, đang nhấn nút Log thủ công...")
-                self.driver.execute_script("arguments[0].click();", send_btns[0])
+            time.sleep(2)  # Đợi 2 giây xem Odoo có đóng khung chat và gửi đi không
 
-            # 7. Move to 'Qualified'
+            # KIỂM TRA: Nếu khung chat hoặc nút gửi vẫn còn hiển thị -> Gửi bằng phím tắt đã thất bại
+            is_form_still_open = False
+            try:
+                # Kiểm tra nhanh xem textarea còn nằm trên màn hình không
+                is_form_still_open = composer_textarea.is_displayed()
+            except Exception:
+                is_form_still_open = False
+
+            if is_form_still_open:
+                # NẾU KHÔNG ĐƯỢC: Đợi thêm 3 giây rồi chuyển sang phương án tìm và bấm nút Log thủ công
+                self.log("Odoo: Phím tắt không thành công hoặc Form chưa đóng. Đợi 3 giây rồi tìm ấn nút Log...")
+                time.sleep(3)
+                
+                send_btn_xpath = (
+                    "//button[contains(@class, 'o-mail-Composer-send')]" 
+                    "|//button[@aria-label='Log']"
+                    "|//button[contains(text(), 'Log')]"
+                    "|//button[contains(text(), 'Ghi lại')]"
+                    "|//div[contains(@class, 'o-mail-Composer-actions')]//button"
+                )
+                
+                send_buttons = self.driver.find_elements(By.XPATH, send_btn_xpath)
+                button_clicked = False
+                for btn in send_buttons:
+                    try:
+                        btn_label = btn.get_attribute("aria-label") or ""
+                        btn_name = btn.get_attribute("name") or ""
+                        
+                        if "emoji" in btn_name or "emoji" in btn_label:
+                            continue
+                            
+                        self.driver.execute_script("arguments[0].click();", btn)
+                        button_clicked = True
+                        self.log("Odoo: Đã ép kích hoạt nút gửi Log Note bằng JS.")
+                        break
+                    except Exception:
+                        continue
+            else:
+                self.log("Odoo: Gửi thành công bằng phím tắt Ctrl + Enter.")
+
+            # 5. Chuyển trạng thái cơ hội sang giai đoạn Qualified
             time.sleep(4) 
             self.log("Odoo: Đang chuyển sang giai đoạn Qualified...")
             qualified_btn = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@data-value='2' or contains(., 'Qualified')]"))
+                EC.element_to_be_clickable((By.XPATH, "//button[@data-value='2' or contains(., 'Qualified') or contains(., 'Đạt tiêu chuẩn')]"))
             )
             self.driver.execute_script("arguments[0].click();", qualified_btn)
             
-            time.sleep(3)
+            time.sleep(2)
             self.queue_count -= 1
             self.log(f"Hệ thống: Đã xử lý thẻ. Còn lại {self.queue_count} trong bộ nhớ phiên.")
             return True
@@ -600,7 +784,7 @@ class FacebookScraper:
             self.macro_thread.start()
 
     def run(self):
-        if not self.initialize_driver(): return
+        if not self.init_driver(): return
         if not self.verify_initial_access():
             self.driver.quit()
             return

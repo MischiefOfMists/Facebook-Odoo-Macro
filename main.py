@@ -4,6 +4,7 @@ from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
 import threading
 import os
+import time  # Imported for session tracking metrics
 from core.scraper import FacebookScraper
 
 # =========================================================
@@ -155,11 +156,18 @@ class MacroApp:
         self.root.configure(bg=BG)
 
         self.scraper_thread = None
+        self.current_scraper = None  
         self.pause_event = threading.Event()
         self.stop_event = threading.Event()
         
-        # FIXED: Tracking dictionary instantiated inside the correct class
         self.preview_labels = {} 
+        self.path_entry = None
+        self.profile_entry = None
+
+        # Track session timestamps and pauses
+        self.start_time = None
+        self.pause_start_time = None
+        self.total_paused_duration = 0
 
         self.setup_style()
         self.setup_ui()
@@ -177,7 +185,7 @@ class MacroApp:
 
         # Center pop-up
         self.root.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 325  # Fixed: Centered overlay calculations properly
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 325  
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 175
         overlay.geometry(f"+{x}+{y}")
 
@@ -187,9 +195,9 @@ class MacroApp:
         ).pack(pady=(20, 10))
 
         msg = (
-            "Script sử dụng Profile Edge hiện tại của bạn. Trước khi bắt đầu script, hãy:\n\n"
-            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên Edge để đảm bảo độ mượt.\n"
-            "• Đăng nhập đúng tài khoản Facebook trước trên Edge.\n"
+            "Script sử dụng Profile Trình duyệt được cấu hình. Trước khi bắt đầu script, hãy:\n\n"
+            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên trình duyệt để đảm bảo độ mượt.\n"
+            "• Đăng nhập đúng tài khoản Facebook trước trên trình duyệt đó.\n"
             "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n\n"
             "Lưu ý: Đây là phiên bản Demo."
         )
@@ -249,6 +257,26 @@ class MacroApp:
             font=("Segoe UI Semibold", 18)
         ).pack(anchor="w", pady=(0, 12))
 
+    def update_live_timer(self):
+        if self.start_time is None:
+            return
+
+        if self.pause_event.is_set():
+            self.root.after(1000, self.update_live_timer)
+            return
+
+        elapsed_seconds = int(time.time() - self.start_time - self.total_paused_duration)
+        if elapsed_seconds < 0:
+            elapsed_seconds = 0
+
+        hours = elapsed_seconds // 3600
+        minutes = (elapsed_seconds % 3600) // 60
+        seconds = elapsed_seconds % 60
+        
+        clock_string = f" ({hours:02d}:{minutes:02d}:{seconds:02d})"
+        self.timer_label.config(text=clock_string)
+        self.root.after(1000, self.update_live_timer)
+
     def modern_button(self, parent, text, color, command):
         return tk.Button(
             parent,
@@ -266,6 +294,111 @@ class MacroApp:
             command=command
         )
 
+    def setup_placeholder(self, entry, placeholder_text, border_frame=None):
+        """Xử lý placeholder biến mất khi gõ và xuất hiện lại khi rỗng."""
+        def on_focus_in(event):
+            if entry.get() == placeholder_text:
+                entry.delete(0, tk.END)
+                entry.config(fg=TEXT)
+            if border_frame:
+                border_frame.config(highlightbackground=ACCENT)
+
+        def on_focus_out(event):
+            if not entry.get():
+                entry.insert(0, placeholder_text)
+                entry.config(fg=SUBTEXT)
+            if border_frame:
+                border_frame.config(highlightbackground="#32384d")
+
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+
+    def handle_browser_layout_change(self, event=None):
+        """Cập nhật các ô nhập tùy biến dựa theo trình duyệt được chọn."""
+        for widget in self.browser_dynamic_frame.winfo_children():
+            widget.destroy()
+
+        browser = self.browser_var.get()
+
+        if browser == "Edge":
+            # Ô nhập đường dẫn bị khóa (Disabled) - Dùng Frame bọc để tạo khoảng đệm text bên trong mà không lỗi
+            tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+            
+            border_frame = tk.Frame(
+                self.browser_dynamic_frame,
+                bg=INPUT,
+                highlightthickness=1,
+                highlightbackground="#2d3345"
+            )
+            border_frame.pack(fill="x", pady=(0, 14))
+
+            self.path_entry = tk.Entry(
+                border_frame,
+                bg=INPUT,
+                fg="#4a526d",
+                disabledbackground=INPUT,
+                disabledforeground="#4a526d",
+                relief="flat",
+                font=("Segoe UI", 10),
+                borderwidth=0,
+                highlightthickness=0
+            )
+            self.path_entry.insert(0, "Default")
+            self.path_entry.config(state="disabled")
+            self.path_entry.pack(fill="x", padx=10, pady=7) # Tạo khoảng đệm ngang dọc ở đây
+            self.profile_entry = None
+
+        elif browser == "LibreWolf":
+            # Ô nhập đường dẫn mở khóa - Dùng Frame bọc tạo khoảng đệm chữ thụt lề vào trong gọn gàng
+            tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+            
+            border_path = tk.Frame(
+                self.browser_dynamic_frame,
+                bg=INPUT,
+                highlightthickness=1,
+                highlightbackground="#32384d"
+            )
+            border_path.pack(fill="x", pady=(0, 12))
+
+            self.path_entry = tk.Entry(
+                border_path,
+                bg=INPUT,
+                fg=SUBTEXT,
+                insertbackground=TEXT,
+                relief="flat",
+                font=("Segoe UI", 10),
+                borderwidth=0,
+                highlightthickness=0
+            )
+            self.path_entry.insert(0, "Default")
+            self.path_entry.pack(fill="x", padx=10, pady=7)
+            self.setup_placeholder(self.path_entry, "Default", border_path)
+
+            # Trường Profile Path cho LibreWolf - Dùng Frame bọc tương thích hoàn chỉnh với layout mẫu
+            tk.Label(self.browser_dynamic_frame, text="Đường dẫn Profile", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+            
+            border_profile = tk.Frame(
+                self.browser_dynamic_frame,
+                bg=INPUT,
+                highlightthickness=1,
+                highlightbackground="#32384d"
+            )
+            border_profile.pack(fill="x", pady=(0, 14))
+
+            self.profile_entry = tk.Entry(
+                border_profile,
+                bg=INPUT,
+                fg=SUBTEXT,
+                insertbackground=TEXT,
+                relief="flat",
+                font=("Segoe UI", 10),
+                borderwidth=0,
+                highlightthickness=0
+            )
+            self.profile_entry.insert(0, "Default")
+            self.profile_entry.pack(fill="x", padx=10, pady=7)
+            self.setup_placeholder(self.profile_entry, "Default", border_profile)
+
     def setup_ui(self):
         # HEADER
         topbar = tk.Frame(self.root, bg=BG)
@@ -279,31 +412,21 @@ class MacroApp:
             font=("Segoe UI Semibold", 24)
         ).pack(anchor="w")
 
-        tk.Label(
-            topbar,
-            text="Bảng điều khiển Matrix Hiện đại",
-            bg=BG,
-            fg=SUBTEXT,
-            font=("Segoe UI", 10)
-        ).pack(anchor="w")
-
         # MAIN LAYOUT
         main = tk.Frame(self.root, bg=BG)
         main.pack(fill="both", expand=True, padx=25, pady=(5, 25))
-        main.grid_columnconfigure(0, weight=0, minsize=340)  # Activity logs panel
+        main.grid_columnconfigure(0, weight=0, minsize=340)  
         main.grid_columnconfigure(1, weight=0, minsize=340)
         main.grid_columnconfigure(2, weight=1)
+        main.grid_rowconfigure(0, weight=1)  
 
         # LEFT COLUMN (LOGS)
         left = tk.Frame(main, bg=BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         self.create_section_title(left, "Log")
-        # 1. FIX: Set the explicit width right here when creating the Frame container
         log_card = tk.Frame(left, bg=CARD, highlightthickness=1, highlightbackground="#2a3042", width=340)
-        
-        # 2. FIX: Remove 'width=260' from pack() so it doesn't crash Tkinter
-        log_card.pack(fill="y", side="left", expand=False) 
-        log_card.pack_propagate(False) # Keeps the text box inside from inflating it
+        log_card.pack(fill="both", expand=True)  
+        log_card.pack_propagate(False) 
 
         self.log_widget = ScrolledText(
             log_card,
@@ -319,48 +442,58 @@ class MacroApp:
         )
         self.log_widget.pack(fill="both", expand=True)
 
-        # Nếu bạn muốn dòng chữ "Trực quan hóa hoạt động" xuất hiện ngay từ đầu:
+        self.log_widget.config(state=tk.NORMAL)
         self.log_widget.insert(tk.END, "➜ Trực quan hóa hoạt động\n")
-        self.log_widget.config(state=tk.DISABLED)  # Khóa lại sau khi chèn xong
+        self.log_widget.config(state=tk.DISABLED)  
 
-        # CENTER COLUMN (SETUP)
+        # CENTER COLUMN (SETUP & TIMED TRACKING)
         center = tk.Frame(main, bg=BG)
         center.grid(row=0, column=1, sticky="nsew", padx=10)
         
-        self.create_section_title(center, "Thẻ hiện tại")
-        current_card = self.create_card(center)
-        current_card.pack(fill="x")
-
-        preview_area = tk.Frame(current_card, bg=CARD_2, height=180)
-        preview_area.pack(fill="both", expand=True, padx=15, pady=15)
-        preview_area.pack_propagate(False)
-
+        title_frame = tk.Frame(center, bg=BG)
+        title_frame.pack(anchor="w", fill="x", pady=(0, 12))
+        
         tk.Label(
-            preview_area,
-            text="Chưa triển khai",
-            bg=CARD_2,
-            fg=SUBTEXT,
-            font=("Segoe UI", 14)
-        ).place(relx=0.5, rely=0.5, anchor="center")
-
-        tk.Frame(center, bg=BG, height=20).pack()
-        self.create_section_title(center, "Cấu hình")
-
+            title_frame,
+            text="Cấu hình",
+            bg=BG,
+            fg=TEXT,
+            font=("Segoe UI Semibold", 18)
+        ).pack(side="left")
+        
+        self.timer_label = tk.Label(
+            title_frame,
+            text=" (00:00:00)",
+            bg=BG,
+            fg="#6c63ff",  
+            font=("Segoe UI Semibold", 14)
+        )
+        self.timer_label.pack(side="left", padx=4, pady=(4, 0))
+        
         setup_card = self.create_card(center)
         setup_card.pack(fill="x")
         content = tk.Frame(setup_card, bg=CARD)
         content.pack(fill="both", expand=True, padx=15, pady=15)
 
+        # KHU VỰC BROWSER CẤU HÌNH
         tk.Label(content, text="Trình duyệt", bg=CARD, fg=SUBTEXT).pack(anchor="w")
         self.browser_var = tk.StringVar(value="Edge")
-        ttk.Combobox(
+        
+        self.browser_cb = ttk.Combobox(
             content,
             textvariable=self.browser_var,
-            values=["Edge"],
+            values=["Edge", "LibreWolf"],
             state="readonly",
             style="Modern.TCombobox"
-        ).pack(fill="x", pady=(6, 18))
+        )
+        self.browser_cb.pack(fill="x", pady=(6, 12))
+        self.browser_cb.bind("<<ComboboxSelected>>", self.handle_browser_layout_change)
 
+        # Khung chứa các ô nhập dữ liệu tùy biến theo Trình duyệt
+        self.browser_dynamic_frame = tk.Frame(content, bg=CARD)
+        self.browser_dynamic_frame.pack(fill="x")
+
+        # KHU VỰC ODOO CẤU HÌNH
         tk.Label(content, text="Trang nguồn (Odoo)", bg=CARD, fg=SUBTEXT).pack(anchor="w")
         self.url_var = tk.StringVar(value="Yingbo Demo")
         self.dropdown = ttk.Combobox(
@@ -387,6 +520,9 @@ class MacroApp:
         self.btn_stop.config(state=tk.DISABLED, width=12)
         self.btn_stop.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
+        # Khởi tạo giao diện ban đầu cho Edge
+        self.handle_browser_layout_change()
+
         # RIGHT COLUMN (MATRIX)
         right = tk.Frame(main, bg=BG)
         right.grid(row=0, column=2, sticky="nsew", padx=(10, 0))
@@ -397,10 +533,9 @@ class MacroApp:
         grid_container = tk.Frame(matrix_card, bg=CARD)
         grid_container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # FIX 1: Configure both rows and columns to share expanding space uniformly
         for i in range(3):
             grid_container.grid_columnconfigure(i, weight=1, uniform="col")
-            grid_container.grid_rowconfigure(i, weight=1, uniform="row") # Added weight=1 and uniform="row"
+            grid_container.grid_rowconfigure(i, weight=1, uniform="row") 
             
         file_idx = 0
         for r in range(3):
@@ -421,7 +556,7 @@ class MacroApp:
                 cell = tk.Frame(grid_container, bg=CARD_2, highlightthickness=1, highlightbackground="#32384d", cursor="hand2")
                 cell.grid(row=r, column=c, sticky="nsew", padx=6, pady=6)
                 cell.grid_propagate(False)
-                cell.pack_propagate(False) # <--- ADD THIS: Stops inner widgets from expanding the frame
+                cell.pack_propagate(False) 
                 
                 cell.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
 
@@ -429,7 +564,6 @@ class MacroApp:
                 top.pack(fill="x", padx=10, pady=(10, 0))
                 tk.Label(top, text=file_name, bg=CARD_2, fg=TEXT, font=("Segoe UI Semibold", 10)).pack(anchor="w")
 
-                # REMOVE fixed wraplength=120 here
                 preview = tk.Label(
                     cell, text=preview_text, bg=CARD_2, fg=SUBTEXT,
                     justify="left", anchor="nw", font=("Segoe UI", 8)
@@ -437,15 +571,12 @@ class MacroApp:
                 preview.bind("<Button-1>", lambda e, p=path, n=file_name: self.open_editor(p, n))
                 preview.pack(fill="both", expand=True, padx=10, pady=10)
                 
-                # MAGIC TRICK: Dynamically adjust wrap length to match the physical width of the frame
                 cell.bind("<Configure>", lambda e, lbl=preview: lbl.config(wraplength=e.width - 20))
                 
                 self.preview_labels[path] = preview
-                
                 file_idx += 1
 
     def refresh_grid(self, path):
-        """Reads the updated file and refreshes its respective label on the grid."""
         if path in self.preview_labels:
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -485,32 +616,70 @@ class MacroApp:
     def start(self):
         url = ODOO_URLS.get(self.url_var.get())
         matrix = self.get_matrix_data_from_files()
+        selected_browser = self.browser_var.get()  
+
+        custom_exe_path = None
+        custom_profile_path = None
+        
+        if selected_browser == "LibreWolf":
+            if self.path_entry and self.path_entry.get() != "Default":
+                custom_exe_path = self.path_entry.get()
+            if self.profile_entry and self.profile_entry.get() != "Default":
+                custom_profile_path = self.profile_entry.get()
+        
+        self.start_time = time.time()
+        self.pause_start_time = None
+        self.total_paused_duration = 0
+        
         self.btn_start.config(state=tk.DISABLED)
         self.btn_pause.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.NORMAL)
         self.pause_event.clear()
         self.stop_event.clear()
-        self.log_message("Bắt đầu tiến trình...")
+        self.log_message(f"Bắt đầu tiến trình trên trình duyệt {selected_browser}...")
 
-        scraper = FacebookScraper(matrix, self.log_message, self.pause_event, self.stop_event, url, self.root)
-        self.scraper_thread = threading.Thread(target=self.run_scraper, args=(scraper,), daemon=True)
+        self.update_live_timer()
+
+        self.current_scraper = FacebookScraper(
+            matrix, self.log_message, self.pause_event, self.stop_event, url, self.root, 
+            browser=selected_browser, exe_path=custom_exe_path, profile_path=custom_profile_path
+        )
+        self.scraper_thread = threading.Thread(target=self.run_scraper, args=(self.current_scraper,), daemon=True)
         self.scraper_thread.start()
 
     def run_scraper(self, scraper):
-        scraper.run()
-        self.root.after(0, self.reset_buttons)
+        try:
+            scraper.run()
+        except Exception as e:
+            if self.stop_event.is_set():
+                pass
+            else:
+                self.log_message(f"Lỗi tiến trình: {e}")
+        finally:
+            self.root.after(0, self.reset_buttons)
 
     def reset_buttons(self):
+        self.start_time = None
+        self.pause_start_time = None
+        self.total_paused_duration = 0
+        self.current_scraper = None
+        self.timer_label.config(text=" (00:00:00)")
+        
         self.btn_start.config(state=tk.NORMAL)
         self.btn_pause.config(state=tk.DISABLED, text="Tạm dừng")
         self.btn_stop.config(state=tk.DISABLED)
 
     def pause(self):
         if self.pause_event.is_set():
+            if self.pause_start_time is not None:
+                self.total_paused_duration += (time.time() - self.pause_start_time)
+                self.pause_start_time = None
+
             self.pause_event.clear()
             self.btn_pause.config(text="Tạm dừng")
             self.log_message("Đã tiếp tục.")
         else:
+            self.pause_start_time = time.time()
             self.pause_event.set()
             self.btn_pause.config(text="Tiếp tục")
             self.log_message("Đã tạm dừng.")
@@ -518,6 +687,28 @@ class MacroApp:
     def stop(self):
         self.log_message("Đang dừng...")
         self.stop_event.set()
+        
+        if self.start_time is not None:
+            current_pause_delta = 0
+            if self.pause_event.is_set() and self.pause_start_time is not None:
+                current_pause_delta = time.time() - self.pause_start_time
+
+            final_elapsed = int(time.time() - self.start_time - self.total_paused_duration - current_pause_delta)
+            if final_elapsed < 0:
+                final_elapsed = 0
+
+            hours = final_elapsed // 3600
+            minutes = (final_elapsed % 3600) // 60
+            seconds = final_elapsed % 60
+            
+            self.log_message(f"Thời gian chạy tổng cộng: {hours:02d}:{minutes:02d}:{seconds:02d}")
+
+        if self.current_scraper and hasattr(self.current_scraper, 'driver') and self.current_scraper.driver:
+            try:
+                self.current_scraper.driver.quit()
+                self.log_message("Đã đóng trình duyệt cưỡng bức.")
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     root = tk.Tk()
