@@ -321,7 +321,7 @@ class MacroApp:
         browser = self.browser_var.get()
 
         if browser == "Edge":
-            # Ô nhập đường dẫn bị khóa (Disabled) - Dùng Frame bọc để tạo khoảng đệm text bên trong mà không lỗi
+            # Ô nhập đường dẫn bị khóa (Disabled)
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
             
             border_frame = tk.Frame(
@@ -345,11 +345,11 @@ class MacroApp:
             )
             self.path_entry.insert(0, "Default")
             self.path_entry.config(state="disabled")
-            self.path_entry.pack(fill="x", padx=10, pady=7) # Tạo khoảng đệm ngang dọc ở đây
+            self.path_entry.pack(fill="x", padx=10, pady=7)
             self.profile_entry = None
 
         elif browser == "LibreWolf":
-            # Ô nhập đường dẫn mở khóa - Dùng Frame bọc tạo khoảng đệm chữ thụt lề vào trong gọn gàng
+            # Ô nhập đường dẫn mở khóa
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
             
             border_path = tk.Frame(
@@ -374,7 +374,7 @@ class MacroApp:
             self.path_entry.pack(fill="x", padx=10, pady=7)
             self.setup_placeholder(self.path_entry, "Default", border_path)
 
-            # Trường Profile Path cho LibreWolf - Dùng Frame bọc tương thích hoàn chỉnh với layout mẫu
+            # Trường Profile Path cho LibreWolf
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn Profile", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
             
             border_profile = tk.Frame(
@@ -475,10 +475,9 @@ class MacroApp:
         content = tk.Frame(setup_card, bg=CARD)
         content.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # KHU VỰC BROWSER CẤU HÌNH
+        # KHU VỰC TRÌNH DUYỆT CẤU HÌNH
         tk.Label(content, text="Trình duyệt", bg=CARD, fg=SUBTEXT).pack(anchor="w")
         self.browser_var = tk.StringVar(value="Edge")
-        
         self.browser_cb = ttk.Combobox(
             content,
             textvariable=self.browser_var,
@@ -487,11 +486,13 @@ class MacroApp:
             style="Modern.TCombobox"
         )
         self.browser_cb.pack(fill="x", pady=(6, 12))
-        self.browser_cb.bind("<<ComboboxSelected>>", self.handle_browser_layout_change)
 
-        # Khung chứa các ô nhập dữ liệu tùy biến theo Trình duyệt
+        # KHU VỰC CHỨA Ô NHẬP ĐỘNG (Dòng này bắt buộc phải tạo trước khi gọi Layout Change)
         self.browser_dynamic_frame = tk.Frame(content, bg=CARD)
         self.browser_dynamic_frame.pack(fill="x")
+
+        # Bind sự kiện thay đổi Combobox trình duyệt
+        self.browser_cb.bind("<<ComboboxSelected>>", self.handle_browser_layout_change)
 
         # KHU VỰC ODOO CẤU HÌNH
         tk.Label(content, text="Trang nguồn (Odoo)", bg=CARD, fg=SUBTEXT).pack(anchor="w")
@@ -503,8 +504,27 @@ class MacroApp:
             state="readonly",
             style="Modern.TCombobox"
         )
-        self.dropdown.pack(fill="x", pady=(6, 25))
+        self.dropdown.pack(fill="x", pady=(6, 12))
 
+        # KHU VỰC CHECKBOX ANTI-SPAM MODE
+        self.antispam_var = tk.BooleanVar(value=False)
+        self.chk_antispam = tk.Checkbutton(
+            content,
+            text="Anti-Spam Mode (Delay gửi 30-60s)",
+            variable=self.antispam_var,
+            bg=CARD,
+            fg=TEXT,
+            selectcolor=CARD_2,      
+            activebackground=CARD,
+            activeforeground=TEXT,
+            font=("Segoe UI", 10),
+            anchor="w",
+            padx=2,
+            pady=8
+        )
+        self.chk_antispam.pack(fill="x", pady=(0, 15))
+
+        # KHU VỰC BUTTONS ĐIỀU KHIỂN
         button_row = tk.Frame(content, bg=CARD)
         button_row.pack(fill="x")
 
@@ -519,9 +539,6 @@ class MacroApp:
         self.btn_stop = self.modern_button(button_row, "Dừng", DANGER, self.stop)
         self.btn_stop.config(state=tk.DISABLED, width=12)
         self.btn_stop.pack(side="left", fill="x", expand=True, padx=(6, 0))
-
-        # Khởi tạo giao diện ban đầu cho Edge
-        self.handle_browser_layout_change()
 
         # RIGHT COLUMN (MATRIX)
         right = tk.Frame(main, bg=BG)
@@ -576,6 +593,12 @@ class MacroApp:
                 self.preview_labels[path] = preview
                 file_idx += 1
 
+        # =========================================================
+        # GỌI HÀM NÀY Ở DƯỚI CÙNG ĐỂ KHỞI TẠO LAYOUT BAN ĐẦU CHO EDGE
+        # TẤT CẢ BIẾN FRAME VÀ WIDGET ĐÃ SẴN SÀNG -> KHÔNG BỊ LỖI NỮA
+        # =========================================================
+        self.handle_browser_layout_change()
+
     def refresh_grid(self, path):
         if path in self.preview_labels:
             try:
@@ -617,6 +640,7 @@ class MacroApp:
         url = ODOO_URLS.get(self.url_var.get())
         matrix = self.get_matrix_data_from_files()
         selected_browser = self.browser_var.get()  
+        anti_spam_active = self.antispam_var.get()
 
         custom_exe_path = None
         custom_profile_path = None
@@ -636,13 +660,16 @@ class MacroApp:
         self.btn_stop.config(state=tk.NORMAL)
         self.pause_event.clear()
         self.stop_event.clear()
-        self.log_message(f"Bắt đầu tiến trình trên trình duyệt {selected_browser}...")
+        
+        spam_log_status = "BẬT" if anti_spam_active else "TẮT"
+        self.log_message(f"Bắt đầu tiến trình trên {selected_browser} [Anti-Spam: {spam_log_status}]...")
 
         self.update_live_timer()
 
         self.current_scraper = FacebookScraper(
             matrix, self.log_message, self.pause_event, self.stop_event, url, self.root, 
-            browser=selected_browser, exe_path=custom_exe_path, profile_path=custom_profile_path
+            browser=selected_browser, exe_path=custom_exe_path, profile_path=custom_profile_path,
+            anti_spam=anti_spam_active
         )
         self.scraper_thread = threading.Thread(target=self.run_scraper, args=(self.current_scraper,), daemon=True)
         self.scraper_thread.start()

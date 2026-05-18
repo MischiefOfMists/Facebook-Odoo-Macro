@@ -18,9 +18,10 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.edge.options import Options as EdgeOptions
 
 class FacebookScraper:
-    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None):
+    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None, anti_spam=False):
+        self.anti_spam = anti_spam
         self.queue_count = 0
-        self.matrix = matrix 
+        self.matrix = matrix
         
         # 1. Save original UI callback to a new variable
         self.ui_log = log_callback 
@@ -38,6 +39,7 @@ class FacebookScraper:
         self.driver = None
         self.odoo_tab = None
         self.root = root
+        
         
         # 4. Custom Browser Configuration
         self.browser = browser
@@ -450,9 +452,16 @@ class FacebookScraper:
         except Exception as e:
             self.log(f"Cảnh báo trong quá trình dọn dẹp chat: {str(e)}")
 
-    def send_fb_message(self, text):
+    def send_fb_message(self, text, is_slow_send=False):
         """Targets Messenger with a single bulk paste for speed and reliability."""
         try:
+            # --- THÊM ĐOẠN NÀY VÀO ĐÂY ---
+            if hasattr(self, 'anti_spam') and self.anti_spam:
+                delay_time = random.randint(30, 60)
+                self.log(f"Anti-Spam Mode: Đang delay ngẫu nhiên {delay_time} giây trước khi gửi tin nhắn...")
+                time.sleep(delay_time)
+            # -----------------------------
+
             # 1. Locate and Scroll to Message Button
             msg_btn_xpath = "//div[@aria-label='Message'] | //div[@aria-label='Nhắn tin'] | //div[@role='button'][contains(., 'Message')]"
             msg_btn = WebDriverWait(self.driver, 15).until(
