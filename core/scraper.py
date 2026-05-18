@@ -4,6 +4,7 @@ import random
 import subprocess
 import pyperclip
 import win32clipboard
+import threading
 from io import BytesIO
 from PIL import Image
 from selenium import webdriver
@@ -17,14 +18,56 @@ class FacebookScraper:
     def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root):
         self.queue_count = 0
         self.matrix = matrix 
-        self.log = log_callback
+        
+        # 1. Save original UI callback to a new variable
+        self.ui_log = log_callback 
+        
+        # 2. Redirect self.log to our new dual-logging file method
+        self.log = self._write_to_session_log 
+        self.log_file_path = None
+        
+        # 3. Initialize the log file immediately when the scraper object is built
+        self.setup_session_logger()
+
         self.pause_event = pause_event
         self.stop_event = stop_event
         self.initial_url = initial_url
         self.driver = None
         self.odoo_tab = None
         self.root = root
+        self.is_running = False # (Your patch)
+
+    def setup_session_logger(self):
+        """Creates the session_logs directory and prepares a unique file for this run."""
+        try:
+            log_dir = "session_logs"
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Generate filename using a neat date-time stamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            self.log_file_path = os.path.join(log_dir, f"session_{timestamp}.log")
+            
+            # Write a clean initialization header line
+            with open(self.log_file_path, "w", encoding="utf-8") as f:
+                f.write(f"=== BIÊN BẢN PHIÊN CHẠY MÁY - {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n\n")
+        except Exception as e:
+            # Fallback to standard print if file creation fails so app doesn't crash
+            print(f"Hệ thống không thể tạo file log: {str(e)}")
+
+    def _write_to_session_log(self, message):
+        """Intercepts all log calls, updates UI, and records history to disk with time hooks."""
+        # 1. Push message to your original Tkinter dashboard terminal
+        if self.ui_log:
+            self.ui_log(message)
         
+        # 2. Silently append the message with a crisp timestamp into the session log file
+        if self.log_file_path:
+            try:
+                time_hook = time.strftime("[%H:%M:%S]")
+                with open(self.log_file_path, "a", encoding="utf-8") as f:
+                    f.write(f"{time_hook} {message}\n")
+            except Exception:
+                pass # Ensures file locks or read/write collisions won't halt the automation loop
 
     def close_all_edge_instances(self):
         try:
@@ -33,7 +76,7 @@ class FacebookScraper:
             # 1. Force kill processes to release file locks
             subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["taskkill", "/F", "/IM", "msedgedriver.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2)
+            time.sleep(random.uniform(2, 4))
 
             # 2. Define the 'Default' profile path
             profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default")
@@ -113,7 +156,7 @@ class FacebookScraper:
             if notifications:
                 self.log("Odoo: Phát hiện mất kết nối. Đang tải lại...")
                 self.driver.refresh()
-                time.sleep(10)
+                time.sleep(random.uniform(9, 11))
                 self.clear_odoo_filters() # Clear filter after refresh
                 return True
             return False
@@ -140,7 +183,7 @@ class FacebookScraper:
     def verify_initial_access(self):
         self.log(f"Odoo: Đang mở {self.initial_url}")
         self.driver.get(self.initial_url)
-        time.sleep(10)
+        time.sleep(random.uniform(9, 12))
 
         # 1. Cloudflare Check
         if self.driver.find_elements(By.CSS_SELECTOR, "div#turnstile-wrapper, #cf-challenge"):
@@ -170,7 +213,7 @@ class FacebookScraper:
             
             # Scroll to it first to ensure it's "active" in the browser's view
             self.driver.execute_script("arguments[0].scrollIntoView(true);", kanban_card)
-            time.sleep(1)
+            time.sleep(random.uniform(5, 8))
             
             # Force the click via JS (ignores overlays and "is_clickable" restrictions)
             self.log("Odoo: Đang thử click vào thẻ bằng JS...")
@@ -184,7 +227,7 @@ class FacebookScraper:
             
             self.log("Odoo: Khả năng tương tác đã được xác minh.")
             self.driver.get(self.initial_url)
-            time.sleep(5)
+            time.sleep(random.uniform(5, 8))
             return True
             
         except Exception as e:
@@ -193,40 +236,52 @@ class FacebookScraper:
             return False
 
     def like_recent_post(self):
-        """Scrolls the post into view and clicks the Like button if not already liked."""
+        """Scrolls down to find and click an unliked post if the initial ones are already liked."""
         try:
             self.log("Facebook: Đang tìm kiếm bài viết để like...")
             
-            # 1. STRATEGY: Match EXACT labels to completely filter out "Gỡ Thích" (Already Liked)
             like_xpath = "//div[(@aria-label='Thích' or @aria-label='Like') and @role='button']"
-            like_buttons = self.driver.find_elements(By.XPATH, like_xpath)
+            already_liked_xpath = "//div[(@aria-label='Gỡ Thích' or @aria-label='Remove Like') and @role='button']"
             
-            if like_buttons:
-                target_button = like_buttons[0]
+            # Set a threshold so it doesn't infinite loop on profiles with no content
+            max_scroll_attempts = 3
+            
+            for attempt in range(max_scroll_attempts):
+                # Always re-scan the DOM for unliked buttons after a scroll
+                like_buttons = self.driver.find_elements(By.XPATH, like_xpath)
                 
-                # 2. Use JS to scroll the specific button into the center of the screen
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
-                    target_button
-                )
-                
-                # 3. Brief pause to let the smooth scroll finish
-                time.sleep(2)
+                if like_buttons:
+                    target_button = like_buttons[0]
+                    
+                    # 1. Smooth scroll to the discovered unliked post node
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", 
+                        target_button
+                    )
+                    # Use your dynamic random buffer to look human while scrolling
+                    time.sleep(random.uniform(2.0, 4.5))
 
-                # 4. Execute click action since the selector only finds unliked states
-                self.driver.execute_script("arguments[0].click();", target_button)
-                self.log("Thành công: Đã cuộn tới bài viết và nhấn like.")
-                time.sleep(random.uniform(1.5, 3.0))
+                    # 2. Click the unliked button
+                    self.driver.execute_script("arguments[0].click();", target_button)
+                    self.log(f"Thành công: Đã tìm thấy bài viết chưa tương tác và nhấn like (Lần thử {attempt + 1}).")
+                    time.sleep(random.uniform(1.5, 3.0))
+                    return  # Target acquired and processed. Drop out of function cleanly!
                 
-            else:
-                # If no unliked buttons are found, check if a "Gỡ Thích" button is visible instead
-                already_liked_xpath = "//div[(@aria-label='Gỡ Thích' or @aria-label='Remove Like') and @role='button']"
-                if self.driver.find_elements(By.XPATH, already_liked_xpath):
-                    self.log("Trạng thái: Bài viết đã được thích từ trước (Gỡ Thích). Bỏ qua bước này.")
+                # If we get here, no UNLIKED buttons were seen. Let's see if we hit an already liked one.
+                has_already_liked = len(self.driver.find_elements(By.XPATH, already_liked_xpath)) > 0
+                
+                if has_already_liked:
+                    self.log(f"Trạng thái: Bài viết hiện tại đã liked. Đang cuộn xuống tìm bài tiếp theo (Vòng {attempt + 1}/{max_scroll_attempts})...")
                 else:
-                    # If absolutely nothing is found, trigger a lazy load scroll
-                    self.driver.execute_script("window.scrollBy(0, 500);")
-                    self.log("Cảnh báo: Không tìm thấy nút tương tác nào. Đã cuộn xuống thêm.")
+                    self.log(f"Cảnh báo: Không phát hiện bài viết. Đang cuộn tải thêm dữ liệu (Vòng {attempt + 1}/{max_scroll_attempts})...")
+                
+                # 3. Physically scroll down by 750 pixels to trigger Facebook's lazy loading
+                self.driver.execute_script("window.scrollBy(0, 750);")
+                
+                # CRUCIAL: Give Facebook's React engine time to fetch and render new HTML nodes
+                time.sleep(random.uniform(3.0, 4.5))
+                
+            self.log("Kết quả: Đã thử cuộn qua nhiều bài viết nhưng tất cả đều đã được thích từ trước. Bỏ qua.")
                 
         except Exception as e:
             self.log(f"Lỗi Like: {str(e)}")
@@ -255,7 +310,7 @@ class FacebookScraper:
                     try:
                         # Force click via JavaScript execution to prevent 'ElementClickInterceptedException'
                         self.driver.execute_script("arguments[0].click();", btn)
-                        self.time.sleep(0.5) # Short grace time for animation closure
+                        time.sleep(2)
                     except Exception as e:
                         pass # Ignore if an individual button action fails or vanishes mid-loop
             else:
@@ -274,7 +329,7 @@ class FacebookScraper:
             )
             
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", msg_btn)
-            time.sleep(1)
+            time.sleep(random.uniform(3, 5))
             msg_btn.click()
             self.log("Messenger: Đang mở cửa sổ chat...")
             
@@ -286,7 +341,7 @@ class FacebookScraper:
             
             # 3. Bulk Paste Logic
             chat_input.click()
-            time.sleep(1)
+            time.sleep(random.uniform(2, 4))
             
             # Copy the whole message from your file to the clipboard
             pyperclip.copy(text)
@@ -297,7 +352,7 @@ class FacebookScraper:
             chat_input.send_keys(Keys.CONTROL, "v")
             
             # Brief pause to let the UI register the paste before hitting Enter
-            time.sleep(1.5)
+            time.sleep(random.uniform(2, 4))
             chat_input.send_keys(Keys.ENTER)
             
             self.log("Thành công: Đã dán và gửi tin nhắn.")
@@ -386,7 +441,7 @@ class FacebookScraper:
             kyc_editor.send_keys(Keys.CONTROL, "v")
             
             # CRITICAL: B2C needs time to process the image upload
-            self.log("Odoo B2C: Đã dán ảnh. Đang chờ xử lý 6s...")
+            self.log("Odoo B2C: Đã dán ảnh. Đang chờ xử lý...")
             time.sleep(6) 
 
             # 4. Handle the text Note field
@@ -401,7 +456,7 @@ class FacebookScraper:
             self.log("Odoo B2C: Ghi chú nhanh đã lưu. Đang chờ giao diện tải lại...")
             
             # Wait for the Quick Note modal/overlay to actually disappear
-            time.sleep(4) 
+            time.sleep(random.uniform(5, 8))
 
             # 6. Re-find the Card to hit 'Qualified'
             # We target the card that has the specific record class
@@ -413,9 +468,9 @@ class FacebookScraper:
                     EC.presence_of_element_located((By.CSS_SELECTOR, "article.o_kanban_record"))
                 )
 
-                # Scroll into view to ensure it's loaded in the DOM properly
-                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", kanban_card)
-                time.sleep(1)
+                # # Scroll into view to ensure it's loaded in the DOM properly
+                # self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", kanban_card)
+                # time.sleep(1)
 
                 # Use JS Click to bypass any invisible 'o_loading' or modal-backdrop divs
                 self.driver.execute_script("arguments[0].click();", kanban_card)
@@ -430,7 +485,7 @@ class FacebookScraper:
                 self.driver.execute_script("arguments[0].click();", kanban_card)
 
             # 7. Move to Qualified
-            time.sleep(2)
+            time.sleep(random.uniform(2, 6))
             qualified_btn = WebDriverWait(self.driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, "//button[@data-value='2' or contains(., 'Qualified')]"))
             )
@@ -456,7 +511,7 @@ class FacebookScraper:
                 EC.element_to_be_clickable((By.XPATH, log_tab_xpath))
             )
             self.driver.execute_script("arguments[0].click();", log_tab)
-            time.sleep(1)
+            time.sleep(2)
 
             # 2. Upload file
             chatter_input = self.driver.find_element(By.CSS_SELECTOR, ".o-mail-Composer input.o_input_file")
@@ -476,9 +531,9 @@ class FacebookScraper:
                 EC.element_to_be_clickable((By.CSS_SELECTOR, real_input_selector))
             )
             
-            self.log("Odoo: Đang định vị lại trình soạn thảo và chờ 5s...")
+            self.log("Odoo: Đang định vị lại trình soạn thảo...")
             composer_textarea.click()
-            time.sleep(5) # Your requested wait time for stability
+            time.sleep(random.uniform(5, 8))
 
             # 5. Perform Ctrl + Enter
             self.log("Odoo: Đang gửi lệnh Ctrl + Enter...")
@@ -538,6 +593,12 @@ class FacebookScraper:
             self.log(f"Lỗi kiểm tra hàng đợi: {str(e)}")
             return True # Continue on error to avoid false stops
         
+    def start_macro(self):
+        if not self.is_running:
+            self.is_running = True
+            self.macro_thread = threading.Thread(target=self.run, daemon=True)
+            self.macro_thread.start()
+
     def run(self):
         if not self.initialize_driver(): return
         if not self.verify_initial_access():
