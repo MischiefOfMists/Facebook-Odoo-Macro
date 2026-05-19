@@ -176,8 +176,8 @@ class MacroApp:
 
     def show_custom_tutorial(self):
         overlay = tk.Toplevel(self.root)
-        overlay.title("Hướng dẫn sử dụng")
-        overlay.geometry("650x350")
+        overlay.title("Lưu ý")
+        overlay.geometry("750x350")
         overlay.configure(bg=CARD)
         overlay.resizable(False, False)
         overlay.transient(self.root) 
@@ -196,10 +196,11 @@ class MacroApp:
 
         msg = (
             "Script sử dụng Profile Trình duyệt được cấu hình. Trước khi bắt đầu script, hãy:\n\n"
-            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên trình duyệt để đảm bảo độ mượt.\n"
-            "• Đăng nhập đúng tài khoản Facebook trước trên trình duyệt đó.\n"
-            "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n\n"
-            "Lưu ý: Đây là phiên bản Demo."
+            "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên trình duyệt (Edge/LibreWolf) để đảm bảo độ mượt.\n"
+            "• Đăng nhập đúng tài khoản Facebook trước trên cùng trình duyệt đó.\n"
+            "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n"
+            "• Macro vẫn còn nhiều lỗi, nếu gặp phải, ghi lại và báo cáo.\n\n"
+            "Lưu ý: Đây là phiên bản Demo. Đọc qua Hướng dẫn sử dụng trước khi dùng."
         )
 
         tk.Label(
@@ -506,23 +507,30 @@ class MacroApp:
         )
         self.dropdown.pack(fill="x", pady=(6, 12))
 
-        # KHU VỰC CHECKBOX ANTI-SPAM MODE
-        self.antispam_var = tk.BooleanVar(value=False)
-        self.chk_antispam = tk.Checkbutton(
+        # KHU VỰC NHẬP THỜI GIAN DELAY TÙY CHỈNH (THAY THẾ CHECKBOX)
+        tk.Label(content, text="Thời gian trì hoãn gửi (giây)", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+        
+        border_delay = tk.Frame(
             content,
-            text="Anti-Spam Mode (Delay gửi 30-60s)",
-            variable=self.antispam_var,
-            bg=CARD,
-            fg=TEXT,
-            selectcolor=CARD_2,      
-            activebackground=CARD,
-            activeforeground=TEXT,
-            font=("Segoe UI", 10),
-            anchor="w",
-            padx=2,
-            pady=8
+            bg=INPUT,
+            highlightthickness=1,
+            highlightbackground="#32384d"
         )
-        self.chk_antispam.pack(fill="x", pady=(0, 15))
+        border_delay.pack(fill="x", pady=(0, 15))
+
+        self.delay_var = tk.StringVar(value="0") # Giá trị mặc định ban đầu là 0 giây
+        self.delay_entry = tk.Entry(
+            border_delay,
+            bg=INPUT,
+            fg=TEXT,
+            textvariable=self.delay_var,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Segoe UI", 10),
+            borderwidth=0,
+            highlightthickness=0
+        )
+        self.delay_entry.pack(fill="x", padx=10, pady=7)
 
         # KHU VỰC BUTTONS ĐIỀU KHIỂN
         button_row = tk.Frame(content, bg=CARD)
@@ -640,7 +648,14 @@ class MacroApp:
         url = ODOO_URLS.get(self.url_var.get())
         matrix = self.get_matrix_data_from_files()
         selected_browser = self.browser_var.get()  
-        anti_spam_active = self.antispam_var.get()
+        
+        # --- Xử lý chuyển đổi dữ liệu từ ô nhập sang số giây ---
+        try:
+            custom_delay = int(self.delay_var.get().strip())
+            if custom_delay < 0:
+                custom_delay = 0
+        except ValueError:
+            custom_delay = 0 # Nếu nhập chữ hoặc để trống sẽ tự đưa về không delay
 
         custom_exe_path = None
         custom_profile_path = None
@@ -661,15 +676,15 @@ class MacroApp:
         self.pause_event.clear()
         self.stop_event.clear()
         
-        spam_log_status = "BẬT" if anti_spam_active else "TẮT"
-        self.log_message(f"Bắt đầu tiến trình trên {selected_browser} [Anti-Spam: {spam_log_status}]...")
+        self.log_message(f"Bắt đầu tiến trình trên {selected_browser} [Delay: {custom_delay}s]...")
 
         self.update_live_timer()
 
+        # Truyền số giây custom_delay vào bộ khởi tạo của Scraper
         self.current_scraper = FacebookScraper(
             matrix, self.log_message, self.pause_event, self.stop_event, url, self.root, 
             browser=selected_browser, exe_path=custom_exe_path, profile_path=custom_profile_path,
-            anti_spam=anti_spam_active
+            custom_delay=custom_delay
         )
         self.scraper_thread = threading.Thread(target=self.run_scraper, args=(self.current_scraper,), daemon=True)
         self.scraper_thread.start()
@@ -733,7 +748,7 @@ class MacroApp:
         if self.current_scraper and hasattr(self.current_scraper, 'driver') and self.current_scraper.driver:
             try:
                 self.current_scraper.driver.quit()
-                self.log_message("Đã đóng trình duyệt cưỡng bức.")
+                self.log_message("Đã đóng trình duyệt.")
             except Exception:
                 pass
 

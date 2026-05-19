@@ -18,8 +18,8 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.edge.options import Options as EdgeOptions
 
 class FacebookScraper:
-    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None, anti_spam=False):
-        self.anti_spam = anti_spam
+    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None, custom_delay=0):
+        self.custom_delay = custom_delay
         self.queue_count = 0
         self.matrix = matrix
         
@@ -452,14 +452,19 @@ class FacebookScraper:
         except Exception as e:
             self.log(f"Cảnh báo trong quá trình dọn dẹp chat: {str(e)}")
 
-    def send_fb_message(self, text, is_slow_send=False):
+    def send_fb_message(self, text):
         """Targets Messenger with a single bulk paste for speed and reliability."""
         try:
             # --- THÊM ĐOẠN NÀY VÀO ĐÂY ---
-            if hasattr(self, 'anti_spam') and self.anti_spam:
-                delay_time = random.randint(30, 60)
-                self.log(f"Anti-Spam Mode: Đang delay ngẫu nhiên {delay_time} giây trước khi gửi tin nhắn...")
-                time.sleep(delay_time)
+            if hasattr(self, 'custom_delay') and self.custom_delay >= 0:
+                actual_delay = self.custom_delay
+                if actual_delay < 5:
+                    self.log(f"Hệ thống: Cấu hình delay ({actual_delay}s) dưới mức an toàn. Tự động tăng lên mức tối thiểu 5 giây...")
+                    actual_delay = 5
+                else:
+                    self.log(f"Hệ thống: Tạm dừng {actual_delay} giây theo cấu hình trước khi gửi tin nhắn...")
+                
+                time.sleep(actual_delay)
             # -----------------------------
 
             # 1. Locate and Scroll to Message Button
