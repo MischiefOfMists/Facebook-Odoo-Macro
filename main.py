@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
+from tkinter import filedialog
 from tkinter.scrolledtext import ScrolledText
 import threading
 import os
@@ -13,6 +14,8 @@ from core.scraper import FacebookScraper
 
 MATRIX_FOLDER = os.path.join("data", "matrix")
 os.makedirs(MATRIX_FOLDER, exist_ok=True)
+
+CONFIG_FILE = os.path.join("data", "browser_config.json")
 
 ODOO_URLS = {
     "B2C": "https://b2c.sge.vn/odoo/crm",
@@ -98,6 +101,8 @@ class TextEditor(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    
+
     def create_button(self, parent, text, color, command):
         return tk.Button(
             parent,
@@ -174,6 +179,78 @@ class MacroApp:
 
         self.root.after(500, self.show_custom_tutorial)
 
+    def load_saved_paths(self):
+        """Đọc đường dẫn đã lưu từ file JSON, nếu không có hoặc lỗi thì trả về mặc định."""
+        default_config = {"exe_path": "Mặc định", "profile_path": "Mặc định"}
+        if not os.path.exists(CONFIG_FILE):
+            return default_config
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                import json
+                return json.load(f)
+        except Exception:
+            return default_config
+
+    def save_paths(self, exe_path, profile_path):
+        """Lưu đường dẫn hiện tại vào file JSON."""
+        try:
+            import json
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            config_data = {"exe_path": exe_path, "profile_path": profile_path}
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"Không thể ghi file cấu hình: {e}")
+
+    def browse_path(self, entry_widget, is_folder=True):
+        """Mở cửa sổ chọn đường dẫn và tự động điền ô còn lại nếu tìm thấy cấu trúc song song."""
+        if is_folder:
+            path = filedialog.askdirectory()
+        else:
+            path = filedialog.askopenfilename(filetypes=[("Executable files", "*.exe")])
+        
+        if not path:
+            return
+
+        # Chuẩn hóa đường dẫn (đổi dấu \ thành / để xử lý đồng nhất)
+        path = os.path.normpath(path).replace('\\', '/')
+
+        # Cập nhật giá trị cho ô hiện tại vừa được chọn
+        entry_widget.delete(0, tk.END)
+        entry_widget.insert(0, path)
+        entry_widget.config(fg="#ffffff")
+
+        # --- LOGIC TỰ ĐỘNG DÒ TÌM Ô CÒN LẠI ---
+        try:
+            if not is_folder:  # Người dùng vừa chọn file librewolf.exe
+                if "LibreWolf/librewolf.exe" in path:
+                    base_dir = path.rsplit("LibreWolf/librewolf.exe", 1)[0]
+                    auto_profile_path = os.path.join(base_dir, "Profiles/Default").replace('\\', '/')
+                    
+                    if os.path.exists(auto_profile_path) and self.profile_entry and self.profile_entry.get() == "Mặc định":
+                        self.profile_entry.delete(0, tk.END)
+                        self.profile_entry.insert(0, auto_profile_path)
+                        self.profile_entry.config(fg="#ffffff")
+                        self.log_message("Tự động phát hiện đường dẫn Profile tương ứng!")
+
+            else:  # Người dùng vừa chọn thư mục Profiles/Default
+                if "Profiles/Default" in path:
+                    base_dir = path.rsplit("Profiles/Default", 1)[0]
+                    auto_exe_path = os.path.join(base_dir, "LibreWolf/librewolf.exe").replace('\\', '/')
+                    
+                    if os.path.exists(auto_exe_path) and self.path_entry and self.path_entry.get() == "Mặc định":
+                        self.path_entry.delete(0, tk.END)
+                        self.path_entry.insert(0, auto_exe_path)
+                        self.path_entry.config(fg="#ffffff")
+                        self.log_message("Tự động phát hiện đường dẫn cài đặt LibreWolf tương ứng!")
+        except Exception as e:
+            print(f"Lỗi tự động điền đường dẫn: {e}")
+
+        # --- LƯU LẠI CẤU HÌNH NGAY SAU KHI THAY ĐỔI ---
+        current_exe = self.path_entry.get() if self.path_entry else "Mặc định"
+        current_profile = self.profile_entry.get() if self.profile_entry else "Mặc định"
+        self.save_paths(current_exe, current_profile)
+            
     def show_custom_tutorial(self):
         overlay = tk.Toplevel(self.root)
         overlay.title("Lưu ý")
@@ -322,7 +399,6 @@ class MacroApp:
         browser = self.browser_var.get()
 
         if browser == "Edge":
-            # Ô nhập đường dẫn bị khóa (Disabled)
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
             
             border_frame = tk.Frame(
@@ -344,61 +420,65 @@ class MacroApp:
                 borderwidth=0,
                 highlightthickness=0
             )
-            self.path_entry.insert(0, "Default")
+            # Sửa thành "Mặc định"
+            self.path_entry.insert(0, "Mặc định")
             self.path_entry.config(state="disabled")
             self.path_entry.pack(fill="x", padx=10, pady=7)
             self.profile_entry = None
 
         elif browser == "LibreWolf":
-            # Ô nhập đường dẫn mở khóa
+            # ĐỌC CẤU HÌNH ĐÃ LƯU TỪ TRƯỚC
+            saved_config = self.load_saved_paths()
+            saved_exe = saved_config.get("exe_path", "Mặc định")
+            saved_profile = saved_config.get("profile_path", "Mặc định")
+
+            # --- Đường dẫn cài đặt ---
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
-            
-            border_path = tk.Frame(
-                self.browser_dynamic_frame,
-                bg=INPUT,
-                highlightthickness=1,
-                highlightbackground="#32384d"
-            )
+            border_path = tk.Frame(self.browser_dynamic_frame, bg=INPUT, highlightthickness=1, highlightbackground="#32384d")
             border_path.pack(fill="x", pady=(0, 12))
 
-            self.path_entry = tk.Entry(
-                border_path,
-                bg=INPUT,
-                fg=SUBTEXT,
-                insertbackground=TEXT,
-                relief="flat",
-                font=("Segoe UI", 10),
-                borderwidth=0,
-                highlightthickness=0
-            )
-            self.path_entry.insert(0, "Default")
-            self.path_entry.pack(fill="x", padx=10, pady=7)
-            self.setup_placeholder(self.path_entry, "Default", border_path)
+            container_path = tk.Frame(border_path, bg=INPUT)
+            container_path.pack(fill="x", padx=10, pady=5)
 
-            # Trường Profile Path cho LibreWolf
-            tk.Label(self.browser_dynamic_frame, text="Đường dẫn Profile", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+            # Xác định màu chữ dựa vào giá trị có phải mặc định hay không
+            exe_fg = SUBTEXT if saved_exe == "Mặc định" else "#ffffff"
+            self.path_entry = tk.Entry(container_path, bg=INPUT, fg=exe_fg, insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), borderwidth=0)
+            self.path_entry.pack(side="left", fill="x", expand=True)
+            self.path_entry.insert(0, saved_exe) # Điền giá trị đã lưu
             
-            border_profile = tk.Frame(
-                self.browser_dynamic_frame,
-                bg=INPUT,
-                highlightthickness=1,
-                highlightbackground="#32384d"
-            )
+            tk.Button(
+                container_path, 
+                text="...", 
+                bg=BUTTON, 
+                fg=TEXT, 
+                command=lambda: self.browse_path(self.path_entry, is_folder=False) 
+            ).pack(side="right", padx=(5, 0))
+            
+            self.setup_placeholder(self.path_entry, "Mặc định", border_path)
+
+            # --- Đường dẫn Profile ---
+            tk.Label(self.browser_dynamic_frame, text="Đường dẫn Profile", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
+            border_profile = tk.Frame(self.browser_dynamic_frame, bg=INPUT, highlightthickness=1, highlightbackground="#32384d")
             border_profile.pack(fill="x", pady=(0, 14))
 
-            self.profile_entry = tk.Entry(
-                border_profile,
-                bg=INPUT,
-                fg=SUBTEXT,
-                insertbackground=TEXT,
-                relief="flat",
-                font=("Segoe UI", 10),
-                borderwidth=0,
-                highlightthickness=0
-            )
-            self.profile_entry.insert(0, "Default")
-            self.profile_entry.pack(fill="x", padx=10, pady=7)
-            self.setup_placeholder(self.profile_entry, "Default", border_profile)
+            container_profile = tk.Frame(border_profile, bg=INPUT)
+            container_profile.pack(fill="x", padx=10, pady=5)
+
+            # Xác định màu chữ tương tự
+            profile_fg = SUBTEXT if saved_profile == "Mặc định" else "#ffffff"
+            self.profile_entry = tk.Entry(container_profile, bg=INPUT, fg=profile_fg, insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), borderwidth=0)
+            self.profile_entry.pack(side="left", fill="x", expand=True)
+            self.profile_entry.insert(0, saved_profile) # Điền giá trị đã lưu
+
+            tk.Button(
+                container_profile, 
+                text="...", 
+                bg=BUTTON, 
+                fg=TEXT, 
+                command=lambda: self.browse_path(self.profile_entry, is_folder=True)
+            ).pack(side="right", padx=(5, 0))
+
+            self.setup_placeholder(self.profile_entry, "Mặc định", border_profile)
 
     def setup_ui(self):
         # HEADER
@@ -478,11 +558,11 @@ class MacroApp:
 
         # KHU VỰC TRÌNH DUYỆT CẤU HÌNH
         tk.Label(content, text="Trình duyệt", bg=CARD, fg=SUBTEXT).pack(anchor="w")
-        self.browser_var = tk.StringVar(value="Edge")
+        self.browser_var = tk.StringVar(value="LibreWolf")
         self.browser_cb = ttk.Combobox(
             content,
             textvariable=self.browser_var,
-            values=["Edge", "LibreWolf"],
+            values=["LibreWolf", "Edge"],
             state="readonly",
             style="Modern.TCombobox"
         )
@@ -660,11 +740,11 @@ class MacroApp:
         custom_exe_path = None
         custom_profile_path = None
         
-        if selected_browser == "LibreWolf":
-            if self.path_entry and self.path_entry.get() != "Default":
-                custom_exe_path = self.path_entry.get()
-            if self.profile_entry and self.profile_entry.get() != "Default":
-                custom_profile_path = self.profile_entry.get()
+        # Cập nhật trong hàm start() của MacroApp
+        if self.path_entry and self.path_entry.get() != "Mặc định": # Đã sửa từ Default
+            custom_exe_path = self.path_entry.get()
+        if self.profile_entry and self.profile_entry.get() != "Mặc định": # Đã sửa từ Default
+            custom_profile_path = self.profile_entry.get()
         
         self.start_time = time.time()
         self.pause_start_time = None
