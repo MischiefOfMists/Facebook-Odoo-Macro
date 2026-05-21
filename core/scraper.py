@@ -21,10 +21,13 @@ import core.facebook_handler as facebook_handler
 
 class FacebookScraper:
     def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", 
-                 exe_path=None, profile_path=None, custom_delay=0):
+                 exe_path=None, profile_path=None, custom_delay=0, check_group_post=True, **kwargs):
         self.custom_delay = custom_delay
         self.queue_count = 0
         self.matrix = matrix
+        
+        # --- THÊM DÒNG NÀY ĐỂ LƯU TRẠNG THÁI CHECKBOX ---
+        self.check_group_post_var = check_group_post 
         
         # 1. Save original UI callback to a new variable
         self.ui_log = log_callback 
@@ -43,7 +46,6 @@ class FacebookScraper:
         self.odoo_tab = None
         self.root = root
         
-        
         # 4. Custom Browser Configuration
         self.browser = browser
         self.exe_path = exe_path
@@ -55,6 +57,7 @@ class FacebookScraper:
         self.close_active_chats = lambda: facebook_handler.close_active_chats(self)
         self.send_fb_message = lambda text: facebook_handler.send_fb_message(self, text)
         self.construct_random_message = lambda: facebook_handler.construct_random_message(self)
+        
 
     
     def init_driver(self):
@@ -660,12 +663,14 @@ class FacebookScraper:
                 self.driver.switch_to.window(self.odoo_tab)
                 self.check_odoo_connection()
                 fb_link = None
+                group_link = None
+                post_link = None
                 
                 # Identify site for logic branching
                 is_demo_site = "yingbo_demo.sge.vn" in self.driver.current_url
                 self.check_pause_and_stop()
 
-                # --- STEP 1: GET FB LINK ---
+                # --- STEP 1: GET FB LINK & GROUP/POST LINKS ---
                 # B2C site logic: Try Quick Note first
                 if not is_demo_site:
                     try:
@@ -682,28 +687,132 @@ class FacebookScraper:
                         pass
 
                 # Demo site logic (or fallback for B2C): Use Form View
+                # Ép buộc vào Form View nếu là Demo site HOẶC nếu B2C chưa lấy được link FB
                 if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
-                    self.log("Odoo: Đang điều hướng tới Form View để lấy link...")
+                    self.log("Odoo: Đang điều hướng tới Form View...")
                     kanban_card = WebDriverWait(self.driver, 10).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, "article.o_kanban_record"))
                     )
                     self.driver.execute_script("arguments[0].click();", kanban_card)
                     time.sleep(4)
 
-                    fb_input_xpath = "//input[@id='x_url_fb_profile_0']"
-                    fb_input = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.XPATH, fb_input_xpath))
-                    )
-                    fb_link = fb_input.get_attribute("value")
+                    # Lấy link cá nhân của Profile FB
+                    try:
+                        fb_input_xpath = "//input[@id='x_url_fb_profile_0']"
+                        fb_input = WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, fb_input_xpath))
+                        )
+                        fb_link = fb_input.get_attribute("value")
+                    except Exception:
+                        fb_link = None
+
+                    # --- NEW: CÀO THÊM LINK GROUP VÀ LINK POST TỪ FORM VIEW ---
+                    try:
+                        group_el = self.driver.find_elements(By.CSS_SELECTOR, "div[name='x_group_link'] a")
+                        if group_el:
+                            group_link = group_el[0].get_attribute("href")
+                    except:
+                        pass
+
+                    try:
+                        post_el = self.driver.find_elements(By.CSS_SELECTOR, "div[name='x_group_post_link'] a")
+                        if post_el:
+                            post_link = post_el[0].get_attribute("href")
+                    except:
+                        pass
 
                 self.check_pause_and_stop()
+
+                # --- STEP 1.5: FACEBOOK GROUP & SPECIFIC POST (CONDITIONAL) ---
+                # Chỉ chạy đoạn này nếu Checkbox trên giao diện đang được tích chọn
+                # --- ĐÃ SỬA: Bỏ .get() vì self.check_group_post_var đã là True/False thuần túy ---
+                if self.check_group_post_var:
                     
-                # --- STEP 2: FACEBOOK ACTIONS ---
+                    # 1. Xử lý Nhóm trước nếu có link
+                    if group_link and ("facebook.com" in group_link or "fb.com" in group_link):
+                        self.log(f"Facebook: Đang kiểm tra nhóm {group_link}")
+                        self.driver.execute_script(f"window.open('{group_link}', '_blank');")
+                        time.sleep(2)
+                        group_tab = self.driver.window_handles[-1]
+                        self.driver.switch_to.window(group_tab)
+                        time.sleep(5)
+
+                        join_xpath = "//div[@role='button'][contains(@aria-label, 'Tham gia') or contains(@aria-label, 'Join') or contains(., 'Tham gia') or contains(., 'Join')]"
+                        join_buttons = self.driver.find_elements(By.XPATH, join_xpath)
+                        
+                        if join_buttons:
+                            page_source = self.driver.page_source.lower()
+                            is_private_or_restricted = "answer" in page_source or "câu hỏi" in page_source or "questions" in page_source
+                            
+                            if is_private_or_restricted:
+                                self.log("Facebook: Nhóm yêu cầu câu hỏi hoặc phê duyệt phức tạp. Bỏ qua chu kỳ này.")
+                                self.driver.close()
+                                self.driver.switch_to.window(self.odoo_tab)
+                                self.driver.get(self.initial_url)
+                                time.sleep(5)
+                                self.clear_odoo_filters()
+                                continue
+                            
+                            try:
+                                self.driver.execute_script("arguments[0].click();", join_buttons[0])
+                                self.log("Facebook: Đã nhấn Tham gia nhóm.")
+                                time.sleep(3)
+                            except:
+                                pass
+                        else:
+                            self.log("Facebook: Đã ở trong nhóm từ trước hoặc không tìm thấy nút Join công khai.")
+
+                        self.driver.close()
+                        self.driver.switch_to.window(self.odoo_tab)
+                        self.check_pause_and_stop()
+
+                    # 2. Xử lý Bài viết chỉ định (Like / Re-like) nếu có link
+                    if post_link and ("facebook.com" in post_link or "fb.com" in post_link):
+                        self.log(f"Facebook: Đang kiểm tra bài viết chỉ định {post_link}")
+                        self.driver.execute_script(f"window.open('{post_link}', '_blank');")
+                        time.sleep(2)
+                        post_tab = self.driver.window_handles[-1]
+                        self.driver.switch_to.window(post_tab)
+                        time.sleep(5)
+
+                        self.driver.execute_script("window.scrollBy(0, 300);")
+                        time.sleep(2)
+
+                        like_xpath = "//div[(@aria-label='Thích' or @aria-label='Like') and @role='button']"
+                        already_liked_xpath = "//div[(@aria-label='Gỡ Thích' or @aria-label='Remove Like' or @aria-label='Unlike') and @role='button']"
+
+                        liked_btn = self.driver.find_elements(By.XPATH, already_liked_xpath)
+                        if liked_btn:
+                            self.log("Facebook: Bài viết đã được Like trước đó. Tiến hành Re-like...")
+                            self.driver.execute_script("arguments[0].click();", liked_btn[0])
+                            time.sleep(2)
+                            
+                            unliked_btn = self.driver.find_elements(By.XPATH, like_xpath)
+                            if unliked_btn:
+                                self.driver.execute_script("arguments[0].click();", unliked_btn[0])
+                                self.log("Facebook: Đã Re-like bài viết thành công.")
+                        else:
+                            unliked_btn = self.driver.find_elements(By.XPATH, like_xpath)
+                            if unliked_btn:
+                                self.driver.execute_script("arguments[0].click();", unliked_btn[0])
+                                self.log("Facebook: Đã Like bài viết thành công.")
+                            else:
+                                self.log("Cảnh báo: Không định vị được nút Like của bài viết này.")
+
+                        time.sleep(2)
+                        self.driver.close()
+                        self.driver.switch_to.window(self.odoo_tab)
+                        self.check_pause_and_stop()
+                else:
+                    # Log thông báo nếu người dùng chủ động tắt tính năng này
+                    self.log("Hệ thống: Bỏ qua bước kiểm tra Nhóm và Like bài viết theo cấu hình.")
+                    
+                # --- STEP 2: FACEBOOK ACTIONS (MESSAGE AND STUFF) ---
                 if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
-                    self.log(f"Cảnh báo: Không có link FB hợp lệ. Đang bỏ qua.")
+                    self.log(f"Cảnh báo: Không có link FB cá nhân hợp lệ để nhắn tin. Bỏ qua.")
                     self.driver.get(self.initial_url)
                     time.sleep(5)
-                    self.clear_odoo_filters() # Kept as requested
+                    self.clear_odoo_filters()
                     continue
 
                 self.driver.execute_script(f"window.open('{fb_link}', '_blank');")
@@ -711,7 +820,7 @@ class FacebookScraper:
                 fb_tab = self.driver.window_handles[-1]
                 self.driver.switch_to.window(fb_tab)
                 
-                self.log(f"Facebook: Đang truy cập {fb_link}")
+                self.log(f"Facebook: Đang truy cập profile để nhắn tin: {fb_link}")
                 time.sleep(5) 
 
                 self.close_active_chats() 
@@ -719,6 +828,7 @@ class FacebookScraper:
 
                 self.like_recent_post()
                 
+                # Biến đổi text dựa trên cấu hình ma trận nội dung
                 msg = self.construct_random_message()
                 if msg:
                     self.send_fb_message(msg)
@@ -734,11 +844,9 @@ class FacebookScraper:
                 # --- STEP 3: ODOO LOGGING (FLIPPED LOGIC) ---
                 if screenshot_path:
                     if is_demo_site:
-                        # Demo site = handle_odoo_logging
                         self.log("Odoo: Trang demo -> Sử dụng Log Note chuẩn.")
                         self.handle_odoo_logging(screenshot_path)
                     else:
-                        # B2C site = handle_b2c_quick_note
                         self.log("Odoo: Trang B2C -> Sử dụng dán Ghi chú nhanh.")
                         self.handle_b2c_quick_note(screenshot_path)
 
@@ -747,7 +855,7 @@ class FacebookScraper:
                 self.log("Odoo: Đang quay lại Pipeline...")
                 self.driver.get(self.initial_url)
                 time.sleep(5)
-                self.clear_odoo_filters() # Kept as requested
+                self.clear_odoo_filters()
 
                 # --- NEW: MANUAL COUNT CHECK ---
                 if self.queue_count <= 0:
@@ -763,5 +871,3 @@ class FacebookScraper:
                     self.clear_odoo_filters()
                 except: pass
                 time.sleep(5)
-
-        # self.driver.quit()

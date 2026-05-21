@@ -43,8 +43,8 @@ class MacroApp:
     def __init__(self, root):
         self.root = root
         self.root.title("FB Messenger Macro")
-        self.root.geometry("1450x720")
-        self.root.minsize(1450, 720)
+        self.root.geometry("1450x800")
+        self.root.minsize(1450, 800)
         self.root.configure(bg=BG)
 
         self.scraper_thread = None
@@ -600,9 +600,77 @@ class MacroApp:
         )
         self.delay_entry.pack(fill="x", padx=10, pady=7)
 
-        # BUTTONS ĐIỀU KHIỂN & DỌN DẸP LOGS
+        # --- ĐOẠN ĐƯỢC SỬA CHẮC CHẮN: CUSTOM CHECKBOX ĐẸP CAO CẤP ---
+        group_post_check_frame = tk.Frame(content, bg=CARD)
+        group_post_check_frame.pack(fill="x", pady=(0, 15), anchor="w")
+
+        # Container đồng bộ vùng click di chuột
+        custom_cb_container = tk.Frame(group_post_check_frame, bg=CARD, cursor="hand2")
+        custom_cb_container.pack(anchor="w")
+
+        # Khởi tạo biến lưu trạng thái core (Gốc luôn giữ nguyên để backend đọc tốt)
+        self.check_group_post_var = tk.BooleanVar(value=True)
+
+        # Hàm chuyển đổi trạng thái khi click
+        def toggle_custom_checkbox(event=None):
+            new_val = not self.check_group_post_var.get()
+            self.check_group_post_var.set(new_val)
+            if new_val:
+                lbl_checkbox_icon.config(text="✓", bg=ACCENT, fg="white")
+            else:
+                lbl_checkbox_icon.config(text=" ", bg=INPUT, fg=TEXT)
+
+        # 1. Ô vuông dấu tích giả lập Checkbox (Styled phẳng, bo bằng padding)
+        lbl_checkbox_icon = tk.Label(
+            custom_cb_container,
+            text="✓",
+            font=("Segoe UI", 10, "bold"),
+            bg=ACCENT,
+            fg="white",
+            width=3,
+            height=1,
+            relief="flat",
+            bd=0
+        )
+        lbl_checkbox_icon.pack(side="left", padx=(0, 10))
+
+        # 2. Chữ hiển thị nhãn đi kèm
+        lbl_checkbox_text = tk.Label(
+            custom_cb_container,
+            text="Tự động kiểm tra Nhóm & Like bài viết chỉ định",
+            bg=CARD,
+            fg=TEXT,
+            font=("Segoe UI", 10)
+        )
+        lbl_checkbox_text.pack(side="left")
+
+        # 3. Tạo hiệu ứng đổi màu mượt mà khi di chuột qua (Hover)
+        def on_cb_hover(e):
+            lbl_checkbox_text.config(fg=ACCENT)  # Chữ sáng lên theo màu chủ đạo app
+            if self.check_group_post_var.get():
+                lbl_checkbox_icon.config(bg="#5b54de")  # Ô vuông BẬT đổi sắc độ nhẹ
+            else:
+                lbl_checkbox_icon.config(bg="#3c445c")  # Ô vuông TẮT đổi sắc độ nhẹ
+
+        def on_cb_leave(e):
+            lbl_checkbox_text.config(fg=TEXT)    # Trả về màu chữ bình thường
+            if self.check_group_post_var.get():
+                lbl_checkbox_icon.config(bg=ACCENT)
+            else:
+                lbl_checkbox_icon.config(bg=INPUT)
+
+        # Ràng buộc sự kiện (Bấm vào chữ hay ô vuông đều ăn)
+        custom_cb_container.bind("<Button-1>", toggle_custom_checkbox)
+        lbl_checkbox_icon.bind("<Button-1>", toggle_custom_checkbox)
+        lbl_checkbox_text.bind("<Button-1>", toggle_custom_checkbox)
+
+        custom_cb_container.bind("<Enter>", on_cb_hover)
+        custom_cb_container.bind("<Leave>", on_cb_leave)
+        # --- KẾT THÚC ĐOẠN SỬA ---
+
+        # BUTTONS ĐIỀU KHIỂN
         button_row = tk.Frame(content, bg=CARD)
-        button_row.pack(fill="x", pady=(0, 10)) # Thêm khoảng cách nhỏ ở dưới row 1
+        button_row.pack(fill="x", pady=(0, 10))
 
         self.btn_start = self.modern_button(button_row, "Bắt đầu", ACCENT, self.start)
         self.btn_start.configure(width=12)
@@ -616,13 +684,13 @@ class MacroApp:
         self.btn_stop.config(state=tk.DISABLED, width=12)
         self.btn_stop.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        # HÀNG RIÊNG CHO NÚT DỌN DẸP LOGS (Đặt gọn gàng ngay dưới hàng điều khiển chính)
+        # HÀNG RIÊNG CHO NÚT DỌN DẸP LOGS
         action_row = tk.Frame(content, bg=CARD)
         action_row.pack(fill="x", pady=(5, 0))
 
         btn_clean = tk.Button(
             action_row,
-            text="Xóa Logs và Hình ảnh cũ",
+            text="Xóa Logs và Hình ảnh cũ",
             bg=CARD,
             fg=SUBTEXT,
             activebackground=CARD,
@@ -693,7 +761,7 @@ class MacroApp:
 
         # Kích hoạt cập nhật layout động sau khi toàn bộ UI cơ sở đã dựng xong an toàn
         self.handle_browser_layout_change()
-
+        
     def refresh_grid(self, path):
         if path in self.preview_labels:
             try:
