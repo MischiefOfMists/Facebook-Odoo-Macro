@@ -18,7 +18,8 @@ from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.edge.options import Options as EdgeOptions
 
 class FacebookScraper:
-    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", exe_path=None, profile_path=None, custom_delay=0):
+    def __init__(self, matrix, log_callback, pause_event, stop_event, initial_url, root, browser="Edge", 
+                 exe_path=None, profile_path=None, custom_delay=0):
         self.custom_delay = custom_delay
         self.queue_count = 0
         self.matrix = matrix
@@ -47,7 +48,8 @@ class FacebookScraper:
         self.profile_path = profile_path
         
         self.is_running = False
-        
+
+    
     def init_driver(self):
         """Initializes the correct browser engine based on UI selection."""
         # Import thư viện gốc ngay đầu hàm để tránh lỗi cục bộ (Local Variable Error)
@@ -173,7 +175,27 @@ class FacebookScraper:
             except Exception as e:
                 self.log(f"Nghiêm trọng: Lỗi khởi tạo Microsoft Edge -> {str(e)}")
                 return False
+    
+    def check_pause_and_stop(self):
+        """Kiểm tra liên tục trạng thái dừng hoặc tạm dừng từ UI"""
+        # 1. Nếu có tín hiệu DỪNG HẲN (Stop)
+        if self.stop_event.is_set():
+            raise Exception("Tiến trình bị dừng bởi người dùng.")
+
+        # 2. Nếu có tín hiệu TẠM DỪNG (Pause)
+        if self.pause_event.is_set():
+            self.log("Hệ thống: Đang tạm dừng... Đang đợi lệnh Tiếp tục.")
             
+            # Vòng lặp vô hạn này sẽ giữ luồng (thread) đứng yên tại chỗ
+            while self.pause_event.is_set():
+                time.sleep(0.5) # Nghỉ ngắn để không gây treo CPU
+                
+                # Trong lúc tạm dừng, nếu người dùng đổi ý bấm DỪNG HẲN
+                if self.stop_event.is_set():
+                    raise Exception("Tiến trình bị dừng bởi người dùng trong khi đang tạm dừng.")
+                    
+            self.log("Hệ thống: Đã tiếp tục chạy tiến trình!")
+
     def setup_session_logger(self):
         """Creates the session_logs directory and prepares a unique file for this run."""
         try:
@@ -817,6 +839,7 @@ class FacebookScraper:
                 
                 # Identify site for logic branching
                 is_demo_site = "yingbo_demo.sge.vn" in self.driver.current_url
+                self.check_pause_and_stop()
 
                 # --- STEP 1: GET FB LINK ---
                 # B2C site logic: Try Quick Note first
@@ -849,6 +872,8 @@ class FacebookScraper:
                     )
                     fb_link = fb_input.get_attribute("value")
 
+                self.check_pause_and_stop()
+                    
                 # --- STEP 2: FACEBOOK ACTIONS ---
                 if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
                     self.log(f"Cảnh báo: Không có link FB hợp lệ. Đang bỏ qua.")
@@ -880,6 +905,7 @@ class FacebookScraper:
 
                 self.driver.close()
                 self.driver.switch_to.window(self.odoo_tab)
+                self.check_pause_and_stop()
                 
                 # --- STEP 3: ODOO LOGGING (FLIPPED LOGIC) ---
                 if screenshot_path:
@@ -892,6 +918,7 @@ class FacebookScraper:
                         self.log("Odoo: Trang B2C -> Sử dụng dán Ghi chú nhanh.")
                         self.handle_b2c_quick_note(screenshot_path)
 
+                self.check_pause_and_stop()
                 # --- STEP 4: RESET ---
                 self.log("Odoo: Đang quay lại Pipeline...")
                 self.driver.get(self.initial_url)

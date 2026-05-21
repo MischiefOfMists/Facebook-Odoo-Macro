@@ -611,6 +611,7 @@ class MacroApp:
             highlightthickness=0
         )
         self.delay_entry.pack(fill="x", padx=10, pady=7)
+        
 
         # KHU VỰC BUTTONS ĐIỀU KHIỂN
         button_row = tk.Frame(content, bg=CARD)
@@ -740,6 +741,26 @@ class MacroApp:
         custom_exe_path = None
         custom_profile_path = None
         
+        if self.path_entry and self.path_entry.get() != "Mặc định":
+            custom_exe_path = self.path_entry.get()
+            if self.profile_entry and self.profile_entry.get() != "Mặc định":
+                custom_profile_path = self.profile_entry.get()
+        
+        self.start_time = time.time()
+        self.pause_start_time = None
+        self.total_paused_duration = 0
+        
+        self.btn_start.config(state=tk.DISABLED)
+        self.btn_pause.config(state=tk.NORMAL)
+        self.btn_stop.config(state=tk.NORMAL)
+        self.pause_event.clear()
+        self.stop_event.clear()
+
+        self.update_live_timer()
+        
+        custom_exe_path = None
+        custom_profile_path = None
+        
         # Cập nhật trong hàm start() của MacroApp
         if self.path_entry and self.path_entry.get() != "Mặc định": # Đã sửa từ Default
             custom_exe_path = self.path_entry.get()
@@ -793,18 +814,33 @@ class MacroApp:
 
     def pause(self):
         if self.pause_event.is_set():
+            # ---- TRẠNG THÁI: TIẾP TỤC CHẠY (RESUME) ----
             if self.pause_start_time is not None:
                 self.total_paused_duration += (time.time() - self.pause_start_time)
                 self.pause_start_time = None
 
             self.pause_event.clear()
-            self.btn_pause.config(text="Tạm dừng")
-            self.log_message("Đã tiếp tục.")
+            
+            # Cấu hình lại giao diện về trạng thái đang chạy bình thường
+            self.btn_pause.config(
+                text="Tạm dừng", 
+                bg=BUTTON,          # Trở lại màu xám đen mặc định
+                activebackground=BUTTON
+            )
+            self.log_message("Đã tiếp tục tiến trình.")
         else:
+            # ---- TRẠNG THÁI: TẠM DỪNG (PAUSE) ----
             self.pause_start_time = time.time()
             self.pause_event.set()
-            self.btn_pause.config(text="Tiếp tục")
-            self.log_message("Đã tạm dừng.")
+            
+            # Thay đổi màu sắc nút nổi bật để người dùng biết app đang đứng đợi
+            WARNING_COLOR = "#ffb03a" # Màu vàng cam cảnh báo
+            self.btn_pause.config(
+                text="Tiếp tục ➜", 
+                bg=WARNING_COLOR, 
+                activebackground=WARNING_COLOR
+            )
+            self.log_message("Đã tạm dừng tiến trình (Trình duyệt sẽ treo giữ nguyên vị trí hiện tại).")
 
     def stop(self):
         self.log_message("Đang dừng...")
