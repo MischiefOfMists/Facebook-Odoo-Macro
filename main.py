@@ -7,10 +7,9 @@ import threading
 import os
 import time  # Imported for session tracking metrics
 from core.scraper import FacebookScraper
+from core.editor import TextEditor
+import core.clean_logs as clean_logs
 
-# =========================================================
-# HẰNG SỐ
-# =========================================================
 
 MATRIX_FOLDER = os.path.join("data", "matrix")
 os.makedirs(MATRIX_FOLDER, exist_ok=True)
@@ -37,118 +36,6 @@ BUTTON = "#2d3345"
 INPUT = "#242938"
 
 # =========================================================
-# TRÌNH CHỈNH SỬA VĂN BẢN
-# =========================================================
-
-class TextEditor(tk.Toplevel):
-    def __init__(self, parent, file_path, title, on_save_callback=None):
-        super().__init__(parent)
-        self.file_path = file_path
-        self.title(f"Đang chỉnh sửa • {title}")
-        self.geometry("580x620")
-        self.configure(bg=BG)
-        self.on_save_callback = on_save_callback
-
-        self.initial_content = ""
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
-                self.initial_content = f.read()
-
-        # HEADER
-        topbar = tk.Frame(self, bg=BG)
-        topbar.pack(fill="x", padx=20, pady=(20, 10))
-
-        tk.Label(
-            topbar,
-            text=title,
-            bg=BG,
-            fg=TEXT,
-            font=("Segoe UI Semibold", 18)
-        ).pack(side="left")
-
-        # EDITOR AREA
-        editor_container = tk.Frame(
-            self,
-            bg=CARD,
-            highlightthickness=1,
-            highlightbackground="#2a3042"
-        )
-        editor_container.pack(fill="both", expand=True, padx=20, pady=(0, 15))
-
-        self.textbox = tk.Text(
-            editor_container,
-            bg=CARD,
-            fg=TEXT,
-            insertbackground=TEXT,
-            relief="flat",
-            borderwidth=0,
-            font=("Consolas", 11),
-            padx=18,
-            pady=18,
-            undo=True,
-            wrap="word"
-        )
-        self.textbox.pack(fill="both", expand=True)
-        self.textbox.insert("1.0", self.initial_content)
-
-        # BUTTONS
-        btn_row = tk.Frame(self, bg=BG)
-        btn_row.pack(fill="x", padx=20, pady=(0, 20))
-
-        self.create_button(btn_row, "Hoàn tác", BUTTON, self.textbox.edit_undo).pack(side="left", padx=(0, 10))
-        self.create_button(btn_row, "Lưu lại", ACCENT, self.save_content).pack(side="left")
-        self.create_button(btn_row, "Đóng", DANGER, self.on_close).pack(side="right")
-
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    
-
-    def create_button(self, parent, text, color, command):
-        return tk.Button(
-            parent,
-            text=text,
-            bg=color,
-            fg="white",
-            activebackground=color,
-            activeforeground="white",
-            relief="flat",
-            borderwidth=0,
-            font=("Segoe UI Semibold", 10),
-            padx=18,
-            pady=10,
-            cursor="hand2",
-            command=command
-        )
-
-    def save_content(self):
-        content = self.textbox.get("1.0", "end-1c")
-        try:
-            with open(self.file_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            self.initial_content = content
-            
-            if self.on_save_callback:
-                self.on_save_callback(self.file_path)
-                
-        except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể lưu tệp:\n{e}")
-
-    def on_close(self):
-        current_content = self.textbox.get("1.0", "end-1c")
-        if current_content != self.initial_content:
-            response = messagebox.askyesnocancel(
-                "Thay đổi chưa lưu",
-                "Bạn có muốn lưu các thay đổi trước khi đóng không?"
-            )
-            if response is True:
-                self.save_content()
-                self.destroy()
-            elif response is False:
-                self.destroy()
-        else:
-            self.destroy()
-
-# =========================================================
 # ỨNG DỤNG CHÍNH
 # =========================================================
 
@@ -168,6 +55,7 @@ class MacroApp:
         self.preview_labels = {} 
         self.path_entry = None
         self.profile_entry = None
+        self.profile_status_label = None
 
         # Track session timestamps and pauses
         self.start_time = None
@@ -201,6 +89,67 @@ class MacroApp:
                 json.dump(config_data, f, ensure_ascii=False, indent=4)
         except Exception as e:
             print(f"Không thể ghi file cấu hình: {e}")
+
+    def trigger_clean_logs(self):
+        """Kích hoạt tiến trình dọn dẹp log từ file clean_logs.py và đẩy log lên giao diện."""
+        # Xác định thư mục gốc chứa file main.py
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Gọi hàm xử lý từ module clean_logs, truyền hàm self.log_message để ghi log lên UI công cụ
+        # (Nếu hàm ghi log của bạn tên khác, hãy đổi self.log_message thành tên hàm tương ứng của bạn)
+        clean_logs.execute_cleaning(base_dir, log_callback=self.log_message)
+
+    def update_profile_label(self):
+        """Bóc tách tên folder profile từ đường dẫn cài đặt, kiểm tra mismatch và cập nhật lên UI."""
+        if not self.profile_status_label:
+            return
+
+        exe_path = self.path_entry.get() if self.path_entry else "Mặc định"
+        profile_path = self.profile_entry.get() if self.profile_entry else "Mặc định"
+        
+        # 1. Xử lý trường hợp một trong hai hoặc cả hai ô là "Mặc định" hoặc trống
+        if not exe_path or exe_path == "Mặc định" or not profile_path or profile_path == "Mặc định":
+            self.profile_status_label.config(text="Khong xac dinh", fg=SUBTEXT)
+            return
+
+        # Chuẩn hóa cả 2 đường dẫn để bóc tách chính xác
+        exe_path = os.path.normpath(exe_path).replace('\\', '/')
+        profile_path = os.path.normpath(profile_path).replace('\\', '/')
+        
+        profile_name_exe = None
+        profile_name_prof = None
+
+        # Tách profile name từ đường dẫn cài đặt (.../Tên_Profile/LibreWolf/librewolf.exe)
+        if "LibreWolf/" in exe_path:
+            try:
+                profile_name_exe = exe_path.split("/LibreWolf/")[0].split("/")[-1]
+            except Exception:
+                pass
+
+        # Tách profile name từ đường dẫn Profile (.../Tên_Profile/Profiles/Default)
+        if "Profiles/Default" in profile_path:
+            try:
+                profile_name_prof = profile_path.split("/Profiles/Default")[0].split("/")[-1]
+            except Exception:
+                pass
+        elif "/Profiles/" in profile_path: # Phòng trường hợp profile không phải Default
+            try:
+                profile_name_prof = profile_path.split("/Profiles/")[0].split("/")[-1]
+            except Exception:
+                pass
+
+        # 2. Kiểm tra xem có lấy được tên profile hợp lệ không
+        if not profile_name_exe or not profile_name_prof:
+            self.profile_status_label.config(text="Không xác định", fg=SUBTEXT)
+            return
+
+        # 3. Kiểm tra Mismatch (Lệch thư mục)
+        if profile_name_exe != profile_name_prof:
+            self.profile_status_label.config(text=f"{profile_name_exe} (Lệch)", fg=DANGER)
+            self.log_message("Đường dẫn profile khác với đường dẫn LibreWolf.exe, vui lòng kiểm tra lại.")
+        else:
+            # Hai đường dẫn khớp nhau hoàn toàn
+            self.profile_status_label.config(text=profile_name_exe, fg="#4da6ff")
 
     def browse_path(self, entry_widget, is_folder=True):
         """Mở cửa sổ chọn đường dẫn và tự động điền ô còn lại nếu tìm thấy cấu trúc song song."""
@@ -250,10 +199,28 @@ class MacroApp:
         current_exe = self.path_entry.get() if self.path_entry else "Mặc định"
         current_profile = self.profile_entry.get() if self.profile_entry else "Mặc định"
         self.save_paths(current_exe, current_profile)
+
+        self.update_profile_label()
             
+    def clear_browser_paths(self):
+        """Xóa nhanh hai đường dẫn về 'Mặc định' và cập nhật lại trạng thái hiển thị."""
+        if self.path_entry:
+            self.path_entry.delete(0, tk.END)
+            self.path_entry.insert(0, "Mặc định")
+            self.path_entry.config(fg=SUBTEXT)
+            
+        if self.profile_entry:
+            self.profile_entry.delete(0, tk.END)
+            self.profile_entry.insert(0, "Mặc định")
+            self.profile_entry.config(fg=SUBTEXT)
+            
+        self.save_paths("Mặc định", "Mặc định")
+        self.update_profile_label()
+        self.log_message("Đã xóa đường dẫn cấu hình trình duyệt.") # <-- Sửa lại log này cho ngắn
+
     def show_custom_tutorial(self):
         overlay = tk.Toplevel(self.root)
-        overlay.title("Lưu ý")
+        overlay.title("Lưu ý")
         overlay.geometry("750x350")
         overlay.configure(bg=CARD)
         overlay.resizable(False, False)
@@ -274,10 +241,10 @@ class MacroApp:
         msg = (
             "Script sử dụng Profile Trình duyệt được cấu hình. Trước khi bắt đầu script, hãy:\n\n"
             "• Đăng nhập Odoo & vượt Cloudflare thủ công trước trên trình duyệt (Edge/LibreWolf) để đảm bảo độ mượt.\n"
-            "• Đăng nhập đúng tài khoản Facebook trước trên cùng trình duyệt đó.\n"
+            "• Đăng nhập đúng tài khoản Facebook trước trên cùng trình duyệt đó.\n"
             "• Đảm bảo đường truyền mạng ổn định, tốc độ cao.\n"
-            "• Macro vẫn còn nhiều lỗi, nếu gặp phải, ghi lại và báo cáo.\n\n"
-            "Lưu ý: Đây là phiên bản Demo. Đọc qua Hướng dẫn sử dụng trước khi dùng."
+            "• Macro vẫn còn nhiều lỗi, nếu gặp phải, ghi lại và báo cáo.\n\n"
+            "Lưu ý: Đây là phiên bản Demo. Đọc qua Hướng dẫn sử dụng trước khi dùng."
         )
 
         tk.Label(
@@ -399,6 +366,7 @@ class MacroApp:
         browser = self.browser_var.get()
 
         if browser == "Edge":
+            self.profile_status_label = None
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
             
             border_frame = tk.Frame(
@@ -420,17 +388,50 @@ class MacroApp:
                 borderwidth=0,
                 highlightthickness=0
             )
-            # Sửa thành "Mặc định"
             self.path_entry.insert(0, "Mặc định")
             self.path_entry.config(state="disabled")
             self.path_entry.pack(fill="x", padx=10, pady=7)
             self.profile_entry = None
 
         elif browser == "LibreWolf":
-            # ĐỌC CẤU HÌNH ĐÃ LƯU TỪ TRƯỚC
             saved_config = self.load_saved_paths()
             saved_exe = saved_config.get("exe_path", "Mặc định")
             saved_profile = saved_config.get("profile_path", "Mặc định")
+
+            # --- DÒNG PROFILE HIỆN TẠI & NÚT XÓA NHANH (CẬP NHẬT) ---
+            status_container = tk.Frame(self.browser_dynamic_frame, bg=CARD)
+            status_container.pack(fill="x", pady=(0, 8))
+            
+            # Left side để chứa text hiển thị
+            text_frame = tk.Frame(status_container, bg=CARD)
+            text_frame.pack(side="left")
+            
+            tk.Label(text_frame, text="Profile hiện tại: ", bg=CARD, fg=SUBTEXT, font=("Segoe UI", 10)).pack(side="left")
+            self.profile_status_label = tk.Label(text_frame, text="Khong xac dinh", bg=CARD, fg=SUBTEXT, font=("Segoe UI Semibold", 10))
+            self.profile_status_label.pack(side="left")
+
+
+            # Nút Xóa nhỏ gọn tinh tế, fit hoàn toàn vào góc phải của box
+            btn_clear = tk.Button(
+                status_container,
+                text="✕",
+                bg=CARD,
+                fg=SUBTEXT,  # Để mặc định màu xám nhẹ cho tinh tế
+                activebackground=CARD,
+                activeforeground=DANGER,  # Khi di chuột/bấm vào mới đổi sang màu đỏ cảnh báo
+                relief="flat",
+                borderwidth=0,
+                font=("Segoe UI Semibold", 11),
+                padx=5,
+                pady=0,
+                cursor="hand2",
+                command=self.clear_browser_paths
+            )
+            btn_clear.pack(side="right", padx=(0, 2))
+
+            # Hiệu ứng hover: di chuột vào nút X thì đổi sang màu đỏ, bỏ ra thì về màu xám subtext
+            btn_clear.bind("<Enter>", lambda e: btn_clear.config(fg=DANGER))
+            btn_clear.bind("<Leave>", lambda e: btn_clear.config(fg=SUBTEXT))
 
             # --- Đường dẫn cài đặt ---
             tk.Label(self.browser_dynamic_frame, text="Đường dẫn cài đặt", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
@@ -440,11 +441,10 @@ class MacroApp:
             container_path = tk.Frame(border_path, bg=INPUT)
             container_path.pack(fill="x", padx=10, pady=5)
 
-            # Xác định màu chữ dựa vào giá trị có phải mặc định hay không
             exe_fg = SUBTEXT if saved_exe == "Mặc định" else "#ffffff"
             self.path_entry = tk.Entry(container_path, bg=INPUT, fg=exe_fg, insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), borderwidth=0)
             self.path_entry.pack(side="left", fill="x", expand=True)
-            self.path_entry.insert(0, saved_exe) # Điền giá trị đã lưu
+            self.path_entry.insert(0, saved_exe)
             
             tk.Button(
                 container_path, 
@@ -464,11 +464,10 @@ class MacroApp:
             container_profile = tk.Frame(border_profile, bg=INPUT)
             container_profile.pack(fill="x", padx=10, pady=5)
 
-            # Xác định màu chữ tương tự
             profile_fg = SUBTEXT if saved_profile == "Mặc định" else "#ffffff"
             self.profile_entry = tk.Entry(container_profile, bg=INPUT, fg=profile_fg, insertbackground=TEXT, relief="flat", font=("Segoe UI", 10), borderwidth=0)
             self.profile_entry.pack(side="left", fill="x", expand=True)
-            self.profile_entry.insert(0, saved_profile) # Điền giá trị đã lưu
+            self.profile_entry.insert(0, saved_profile)
 
             tk.Button(
                 container_profile, 
@@ -479,6 +478,9 @@ class MacroApp:
             ).pack(side="right", padx=(5, 0))
 
             self.setup_placeholder(self.profile_entry, "Mặc định", border_profile)
+            
+            # Khởi chạy cập nhật text ngay khi render xong giao diện dựa vào dữ liệu đã load thành công trước đó
+            self.update_profile_label()
 
     def setup_ui(self):
         # HEADER
@@ -527,7 +529,7 @@ class MacroApp:
         self.log_widget.insert(tk.END, "➜ Trực quan hóa hoạt động\n")
         self.log_widget.config(state=tk.DISABLED)  
 
-        # CENTER COLUMN (SETUP & TIMED TRACKING)
+        # CENTER COLUMN
         center = tk.Frame(main, bg=BG)
         center.grid(row=0, column=1, sticky="nsew", padx=10)
         
@@ -556,7 +558,7 @@ class MacroApp:
         content = tk.Frame(setup_card, bg=CARD)
         content.pack(fill="both", expand=True, padx=15, pady=15)
 
-        # KHU VỰC TRÌNH DUYỆT CẤU HÌNH
+        # TRÌNH DUYỆT
         tk.Label(content, text="Trình duyệt", bg=CARD, fg=SUBTEXT).pack(anchor="w")
         self.browser_var = tk.StringVar(value="LibreWolf")
         self.browser_cb = ttk.Combobox(
@@ -568,14 +570,12 @@ class MacroApp:
         )
         self.browser_cb.pack(fill="x", pady=(6, 12))
 
-        # KHU VỰC CHỨA Ô NHẬP ĐỘNG (Dòng này bắt buộc phải tạo trước khi gọi Layout Change)
+        # Ô NHẬP ĐỘNG
         self.browser_dynamic_frame = tk.Frame(content, bg=CARD)
         self.browser_dynamic_frame.pack(fill="x")
-
-        # Bind sự kiện thay đổi Combobox trình duyệt
         self.browser_cb.bind("<<ComboboxSelected>>", self.handle_browser_layout_change)
 
-        # KHU VỰC ODOO CẤU HÌNH
+        # ODOO CẤU HÌNH
         tk.Label(content, text="Trang nguồn (Odoo)", bg=CARD, fg=SUBTEXT).pack(anchor="w")
         self.url_var = tk.StringVar(value="Yingbo Demo")
         self.dropdown = ttk.Combobox(
@@ -587,35 +587,22 @@ class MacroApp:
         )
         self.dropdown.pack(fill="x", pady=(6, 12))
 
-        # KHU VỰC NHẬP THỜI GIAN DELAY TÙY CHỈNH (THAY THẾ CHECKBOX)
+        # DELAY
         tk.Label(content, text="Thời gian trì hoãn gửi (giây)", bg=CARD, fg=SUBTEXT).pack(anchor="w", pady=(0, 4))
-        
-        border_delay = tk.Frame(
-            content,
-            bg=INPUT,
-            highlightthickness=1,
-            highlightbackground="#32384d"
-        )
+        border_delay = tk.Frame(content, bg=INPUT, highlightthickness=1, highlightbackground="#32384d")
         border_delay.pack(fill="x", pady=(0, 15))
 
-        self.delay_var = tk.StringVar(value="0") # Giá trị mặc định ban đầu là 0 giây
+        self.delay_var = tk.StringVar(value="0")
         self.delay_entry = tk.Entry(
-            border_delay,
-            bg=INPUT,
-            fg=TEXT,
-            textvariable=self.delay_var,
-            insertbackground=TEXT,
-            relief="flat",
-            font=("Segoe UI", 10),
-            borderwidth=0,
-            highlightthickness=0
+            border_delay, bg=INPUT, fg=TEXT, textvariable=self.delay_var,
+            insertbackground=TEXT, relief="flat", font=("Segoe UI", 10),
+            borderwidth=0, highlightthickness=0
         )
         self.delay_entry.pack(fill="x", padx=10, pady=7)
-        
 
-        # KHU VỰC BUTTONS ĐIỀU KHIỂN
+        # BUTTONS ĐIỀU KHIỂN & DỌN DẸP LOGS
         button_row = tk.Frame(content, bg=CARD)
-        button_row.pack(fill="x")
+        button_row.pack(fill="x", pady=(0, 10)) # Thêm khoảng cách nhỏ ở dưới row 1
 
         self.btn_start = self.modern_button(button_row, "Bắt đầu", ACCENT, self.start)
         self.btn_start.configure(width=12)
@@ -628,6 +615,28 @@ class MacroApp:
         self.btn_stop = self.modern_button(button_row, "Dừng", DANGER, self.stop)
         self.btn_stop.config(state=tk.DISABLED, width=12)
         self.btn_stop.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # HÀNG RIÊNG CHO NÚT DỌN DẸP LOGS (Đặt gọn gàng ngay dưới hàng điều khiển chính)
+        action_row = tk.Frame(content, bg=CARD)
+        action_row.pack(fill="x", pady=(5, 0))
+
+        btn_clean = tk.Button(
+            action_row,
+            text="Xóa Logs và Hình ảnh cũ",
+            bg=CARD,
+            fg=SUBTEXT,
+            activebackground=CARD,
+            activeforeground=DANGER,
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=0,
+            font=("Segoe UI Semibold", 10),
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self.trigger_clean_logs
+        )
+        btn_clean.pack(fill="x", expand=True)
 
         # RIGHT COLUMN (MATRIX)
         right = tk.Frame(main, bg=BG)
@@ -682,10 +691,7 @@ class MacroApp:
                 self.preview_labels[path] = preview
                 file_idx += 1
 
-        # =========================================================
-        # GỌI HÀM NÀY Ở DƯỚI CÙNG ĐỂ KHỞI TẠO LAYOUT BAN ĐẦU CHO EDGE
-        # TẤT CẢ BIẾN FRAME VÀ WIDGET ĐÃ SẴN SÀNG -> KHÔNG BỊ LỖI NỮA
-        # =========================================================
+        # Kích hoạt cập nhật layout động sau khi toàn bộ UI cơ sở đã dựng xong an toàn
         self.handle_browser_layout_change()
 
     def refresh_grid(self, path):
@@ -703,6 +709,7 @@ class MacroApp:
             self.preview_labels[path].config(text=preview_text) 
 
     def open_editor(self, path, name):
+        # Gọi trực tiếp lớp TextEditor đã import từ file editor.py phụ bên ngoài
         TextEditor(self.root, path, name, on_save_callback=self.refresh_grid)
 
     def log_message(self, message):
@@ -730,41 +737,19 @@ class MacroApp:
         matrix = self.get_matrix_data_from_files()
         selected_browser = self.browser_var.get()  
         
-        # --- Xử lý chuyển đổi dữ liệu từ ô nhập sang số giây ---
         try:
             custom_delay = int(self.delay_var.get().strip())
             if custom_delay < 0:
                 custom_delay = 0
         except ValueError:
-            custom_delay = 0 # Nếu nhập chữ hoặc để trống sẽ tự đưa về không delay
+            custom_delay = 0
 
         custom_exe_path = None
         custom_profile_path = None
         
         if self.path_entry and self.path_entry.get() != "Mặc định":
             custom_exe_path = self.path_entry.get()
-            if self.profile_entry and self.profile_entry.get() != "Mặc định":
-                custom_profile_path = self.profile_entry.get()
-        
-        self.start_time = time.time()
-        self.pause_start_time = None
-        self.total_paused_duration = 0
-        
-        self.btn_start.config(state=tk.DISABLED)
-        self.btn_pause.config(state=tk.NORMAL)
-        self.btn_stop.config(state=tk.NORMAL)
-        self.pause_event.clear()
-        self.stop_event.clear()
-
-        self.update_live_timer()
-        
-        custom_exe_path = None
-        custom_profile_path = None
-        
-        # Cập nhật trong hàm start() của MacroApp
-        if self.path_entry and self.path_entry.get() != "Mặc định": # Đã sửa từ Default
-            custom_exe_path = self.path_entry.get()
-        if self.profile_entry and self.profile_entry.get() != "Mặc định": # Đã sửa từ Default
+        if self.profile_entry and self.profile_entry.get() != "Mặc định":
             custom_profile_path = self.profile_entry.get()
         
         self.start_time = time.time()
@@ -778,10 +763,8 @@ class MacroApp:
         self.stop_event.clear()
         
         self.log_message(f"Bắt đầu tiến trình trên {selected_browser} [Delay: {custom_delay}s]...")
-
         self.update_live_timer()
 
-        # Truyền số giây custom_delay vào bộ khởi tạo của Scraper
         self.current_scraper = FacebookScraper(
             matrix, self.log_message, self.pause_event, self.stop_event, url, self.root, 
             browser=selected_browser, exe_path=custom_exe_path, profile_path=custom_profile_path,
@@ -794,9 +777,7 @@ class MacroApp:
         try:
             scraper.run()
         except Exception as e:
-            if self.stop_event.is_set():
-                pass
-            else:
+            if not self.stop_event.is_set():
                 self.log_message(f"Lỗi tiến trình: {e}")
         finally:
             self.root.after(0, self.reset_buttons)
@@ -814,59 +795,22 @@ class MacroApp:
 
     def pause(self):
         if self.pause_event.is_set():
-            # ---- TRẠNG THÁI: TIẾP TỤC CHẠY (RESUME) ----
             if self.pause_start_time is not None:
                 self.total_paused_duration += (time.time() - self.pause_start_time)
                 self.pause_start_time = None
-
             self.pause_event.clear()
-            
-            # Cấu hình lại giao diện về trạng thái đang chạy bình thường
-            self.btn_pause.config(
-                text="Tạm dừng", 
-                bg=BUTTON,          # Trở lại màu xám đen mặc định
-                activebackground=BUTTON
-            )
+            self.btn_pause.config(text="Tạm dừng", bg=BUTTON, activebackground=BUTTON)
             self.log_message("Đã tiếp tục tiến trình.")
         else:
-            # ---- TRẠNG THÁI: TẠM DỪNG (PAUSE) ----
             self.pause_start_time = time.time()
             self.pause_event.set()
-            
-            # Thay đổi màu sắc nút nổi bật để người dùng biết app đang đứng đợi
-            WARNING_COLOR = "#ffb03a" # Màu vàng cam cảnh báo
-            self.btn_pause.config(
-                text="Tiếp tục ➜", 
-                bg=WARNING_COLOR, 
-                activebackground=WARNING_COLOR
-            )
-            self.log_message("Đã tạm dừng tiến trình (Trình duyệt sẽ treo giữ nguyên vị trí hiện tại).")
+            self.btn_pause.config(text="Tiếp tục ➜", bg="#ffb03a", activebackground="#ffb03a")
+            self.log_message("Đã tạm dừng tiến trình.")
 
     def stop(self):
-        self.log_message("Đang dừng...")
         self.stop_event.set()
-        
-        if self.start_time is not None:
-            current_pause_delta = 0
-            if self.pause_event.is_set() and self.pause_start_time is not None:
-                current_pause_delta = time.time() - self.pause_start_time
-
-            final_elapsed = int(time.time() - self.start_time - self.total_paused_duration - current_pause_delta)
-            if final_elapsed < 0:
-                final_elapsed = 0
-
-            hours = final_elapsed // 3600
-            minutes = (final_elapsed % 3600) // 60
-            seconds = final_elapsed % 60
-            
-            self.log_message(f"Thời gian chạy tổng cộng: {hours:02d}:{minutes:02d}:{seconds:02d}")
-
-        if self.current_scraper and hasattr(self.current_scraper, 'driver') and self.current_scraper.driver:
-            try:
-                self.current_scraper.driver.quit()
-                self.log_message("Đã đóng trình duyệt.")
-            except Exception:
-                pass
+        self.pause_event.clear()  # Giải phóng nếu đang pause
+        self.log_message("Đang yêu cầu dừng tiến trình...")
 
 if __name__ == "__main__":
     root = tk.Tk()
