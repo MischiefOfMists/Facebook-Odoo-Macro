@@ -108,8 +108,8 @@ class MacroApp:
         profile_path = self.profile_entry.get() if self.profile_entry else "Mặc định"
         
         # 1. Xử lý trường hợp một trong hai hoặc cả hai ô là "Mặc định" hoặc trống
-        if not exe_path or exe_path == "Mặc định" or not profile_path or profile_path == "Mặc định":
-            self.profile_status_label.config(text="Khong xac dinh", fg=SUBTEXT)
+        if not exe_path or exe_path == "Mặc định" or not profile_path or profile_path == "Mặc định" or profile_path == "Không cần thiết":
+            self.profile_status_label.config(text="Không xác định", fg=SUBTEXT)
             return
 
         # Chuẩn hóa cả 2 đường dẫn để bóc tách chính xác
@@ -119,20 +119,31 @@ class MacroApp:
         profile_name_exe = None
         profile_name_prof = None
 
-        # Tách profile name từ đường dẫn cài đặt (.../Tên_Profile/LibreWolf/librewolf.exe)
-        if "LibreWolf/" in exe_path:
+        # --- TRƯỜNG HỢP 1: BẢN PORTABLE (Mới thêm) ---
+        if "/LibreWolf/librewolf.exe" in exe_path:
+            try:
+                profile_name_exe = exe_path.split("/LibreWolf/")[0].split("/")[-1]
+            except Exception:
+                pass
+        # --- TRƯỜNG HỢP 2: BẢN CÀI ĐẶT THƯỜNG (Của ông) ---
+        elif "LibreWolf/" in exe_path:
             try:
                 profile_name_exe = exe_path.split("/LibreWolf/")[0].split("/")[-1]
             except Exception:
                 pass
 
-        # Tách profile name từ đường dẫn Profile (.../Tên_Profile/Profiles/Default)
-        if "Profiles/Default" in profile_path:
+        # --- TÁCH PROFILE NAME TỪ ĐƯỜNG DẪN PROFILE ---
+        if "/Profile/Default" in profile_path:  # Thư mục của bản Portable
+            try:
+                profile_name_prof = profile_path.split("/Profile/Default")[0].split("/")[-1]
+            except Exception:
+                pass
+        elif "Profiles/Default" in profile_path:  # Thư mục bản cài đặt thường
             try:
                 profile_name_prof = profile_path.split("/Profiles/Default")[0].split("/")[-1]
             except Exception:
                 pass
-        elif "/Profiles/" in profile_path: # Phòng trường hợp profile không phải Default
+        elif "/Profiles/" in profile_path: 
             try:
                 profile_name_prof = profile_path.split("/Profiles/")[0].split("/")[-1]
             except Exception:
@@ -140,16 +151,19 @@ class MacroApp:
 
         # 2. Kiểm tra xem có lấy được tên profile hợp lệ không
         if not profile_name_exe or not profile_name_prof:
-            self.profile_status_label.config(text="Không xác định", fg=SUBTEXT)
+            self.profile_status_label.config(text="Không xác định", fg=SUBTEXT)
             return
 
         # 3. Kiểm tra Mismatch (Lệch thư mục)
         if profile_name_exe != profile_name_prof:
             self.profile_status_label.config(text=f"{profile_name_exe} (Lệch)", fg=DANGER)
-            self.log_message("Đường dẫn profile khác với đường dẫn LibreWolf.exe, vui lòng kiểm tra lại.")
+            self.log_message("Đường dẫn profile khác với đường dẫn LibreWolf.exe, vui lòng kiểm tra lại.")
         else:
-            # Hai đường dẫn khớp nhau hoàn toàn
-            self.profile_status_label.config(text=profile_name_exe, fg="#4da6ff")
+            # Hai đường dẫn khớp nhau hoàn toàn (Hiển thị nhãn kèm hậu tố nếu là Portable)
+            if "/App/LibreWolf/" in exe_path:
+                self.profile_status_label.config(text=f"{profile_name_exe} (Portable)", fg="#4da6ff")
+            else:
+                self.profile_status_label.config(text=profile_name_exe, fg="#4da6ff")
 
     def browse_path(self, entry_widget, is_folder=True):
         """Mở cửa sổ chọn đường dẫn và tự động điền ô còn lại nếu tìm thấy cấu trúc song song."""
@@ -164,36 +178,65 @@ class MacroApp:
         # Chuẩn hóa đường dẫn (đổi dấu \ thành / để xử lý đồng nhất)
         path = os.path.normpath(path).replace('\\', '/')
 
-        # Cập nhật giá trị cho ô hiện tại vừa được chọn
-        entry_widget.delete(0, tk.END)
-        entry_widget.insert(0, path)
-        entry_widget.config(fg="#ffffff")
+        # --- LOGIC ĐẶC BIỆT: NẾU NGƯỜI DÙNG CHỌN FILE PORTABLE.EXE ---
+        if not is_folder and "LibreWolf-Portable.exe" in path:
+            # Lấy thư mục gốc (Ví dụ: "C:/Users/Admin/Downloads/SR0328_Jasiminethoai")
+            base_dir = os.path.dirname(path)
+            
+            # Khớp trực tiếp vào thư mục LibreWolf và Profile/Default theo cấu trúc thực tế
+            auto_exe_path = os.path.normpath(os.path.join(base_dir, "LibreWolf", "librewolf.exe"))
+            auto_profile_path = os.path.normpath(os.path.join(base_dir, "Profiles", "Default"))
+            
+            # Đổi dấu gạch xuôi để hiển thị đồng nhất và sạch sẽ trên UI
+            auto_exe_path = auto_exe_path.replace('\\', '/')
+            auto_profile_path = auto_profile_path.replace('\\', '/')
+            
+            # Điền file lõi vào ô Path Entry
+            if self.path_entry:
+                self.path_entry.delete(0, tk.END)
+                self.path_entry.insert(0, auto_exe_path)
+                self.path_entry.config(fg="#ffffff")
+                
+            # Điền Profile chuẩn vào ô Profile Entry
+            if self.profile_entry:
+                if str(self.profile_entry['state']) == tk.DISABLED:
+                    self.profile_entry.config(state=tk.NORMAL)
+                self.profile_entry.delete(0, tk.END)
+                self.profile_entry.insert(0, auto_profile_path)
+                self.profile_entry.config(fg="#ffffff")
+                
+            self.log_message("Phát hiện LibreWolf Portable! Tự động chuyển hướng sang file lõi và Profile gốc.")
+            
+        else:
+            # --- LOGIC XỬ LÝ THÔNG THƯỜNG (Giữ nguyên của ông) ---
+            entry_widget.delete(0, tk.END)
+            entry_widget.insert(0, path)
+            entry_widget.config(fg="#ffffff")
 
-        # --- LOGIC TỰ ĐỘNG DÒ TÌM Ô CÒN LẠI ---
-        try:
-            if not is_folder:  # Người dùng vừa chọn file librewolf.exe
-                if "LibreWolf/librewolf.exe" in path:
-                    base_dir = path.rsplit("LibreWolf/librewolf.exe", 1)[0]
-                    auto_profile_path = os.path.join(base_dir, "Profiles/Default").replace('\\', '/')
-                    
-                    if os.path.exists(auto_profile_path) and self.profile_entry and self.profile_entry.get() == "Mặc định":
-                        self.profile_entry.delete(0, tk.END)
-                        self.profile_entry.insert(0, auto_profile_path)
-                        self.profile_entry.config(fg="#ffffff")
-                        self.log_message("Tự động phát hiện đường dẫn Profile tương ứng!")
+            try:
+                if not is_folder:  # Người dùng vừa chọn file librewolf.exe thông thường
+                    if "LibreWolf/librewolf.exe" in path:
+                        base_dir = path.rsplit("LibreWolf/librewolf.exe", 1)[0]
+                        auto_profile_path = os.path.join(base_dir, "Profiles/Default").replace('\\', '/')
+                        
+                        if os.path.exists(auto_profile_path) and self.profile_entry and self.profile_entry.get() == "Mặc định":
+                            self.profile_entry.delete(0, tk.END)
+                            self.profile_entry.insert(0, auto_profile_path)
+                            self.profile_entry.config(fg="#ffffff")
+                            self.log_message("Tự động phát hiện đường dẫn Profile tương ứng!")
 
-            else:  # Người dùng vừa chọn thư mục Profiles/Default
-                if "Profiles/Default" in path:
-                    base_dir = path.rsplit("Profiles/Default", 1)[0]
-                    auto_exe_path = os.path.join(base_dir, "LibreWolf/librewolf.exe").replace('\\', '/')
-                    
-                    if os.path.exists(auto_exe_path) and self.path_entry and self.path_entry.get() == "Mặc định":
-                        self.path_entry.delete(0, tk.END)
-                        self.path_entry.insert(0, auto_exe_path)
-                        self.path_entry.config(fg="#ffffff")
-                        self.log_message("Tự động phát hiện đường dẫn cài đặt LibreWolf tương ứng!")
-        except Exception as e:
-            print(f"Lỗi tự động điền đường dẫn: {e}")
+                else:  # Người dùng vừa chọn thư mục Profiles/Default
+                    if "Profiles/Default" in path:
+                        base_dir = path.rsplit("Profiles/Default", 1)[0]
+                        auto_exe_path = os.path.join(base_dir, "LibreWolf/librewolf.exe").replace('\\', '/')
+                        
+                        if os.path.exists(auto_exe_path) and self.path_entry and self.path_entry.get() == "Mặc định":
+                            self.path_entry.delete(0, tk.END)
+                            self.path_entry.insert(0, auto_exe_path)
+                            self.path_entry.config(fg="#ffffff")
+                            self.log_message("Tự động phát hiện đường dẫn cài đặt LibreWolf tương ứng!")
+            except Exception as e:
+                print(f"Lỗi tự động điền đường dẫn: {e}")
 
         # --- LƯU LẠI CẤU HÌNH NGAY SAU KHI THAY ĐỔI ---
         current_exe = self.path_entry.get() if self.path_entry else "Mặc định"

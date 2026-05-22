@@ -16,6 +16,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
 import core.facebook_handler as facebook_handler
 
@@ -62,7 +65,6 @@ class FacebookScraper:
     
     def init_driver(self):
         """Initializes the correct browser engine based on UI selection."""
-        # Import thư viện gốc ngay đầu hàm để tránh lỗi cục bộ (Local Variable Error)
         from selenium import webdriver
         import os
         import time
@@ -85,11 +87,9 @@ class FacebookScraper:
             
             from selenium.webdriver.firefox.service import Service as FirefoxService
             from webdriver_manager.firefox import GeckoDriverManager
+            from selenium.webdriver.firefox.options import Options as FirefoxOptions
             
-            # Sử dụng lớp Options tổng quát để cấu hình trực tiếp nhằm vượt qua lỗi nạp module
-            from selenium.webdriver.common.options import ArgOptions
-            options = ArgOptions()
-            options.set_capability("browserName", "firefox")
+            options = FirefoxOptions()
             
             import sys
             if hasattr(sys, '_MEIPASS'):
@@ -98,51 +98,40 @@ class FacebookScraper:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 root_dir = os.path.dirname(current_dir) if os.path.basename(current_dir) == "core" else current_dir
 
-            # --- GIỮ NGUYÊN ĐƯỜNG DẪN MẶC ĐỊNH CỦA BRO ---
+            # Đường dẫn mặc định nội bộ
             librewolf_path = os.path.join(root_dir, "LibreWolf", "librewolf.exe")
             profile_path = os.path.join(root_dir, "Profiles", "Default")
             
-            # --- CODE THÊM MỚI: Ghi đè nếu có đường dẫn tùy chỉnh từ UI ---
+            # Đọc đường dẫn từ UI gán vào
             if hasattr(self, 'exe_path') and self.exe_path and self.exe_path != "Default":
                 librewolf_path = self.exe_path
                 
-            if hasattr(self, 'profile_path') and self.profile_path and self.profile_path != "Default":
+            if hasattr(self, 'profile_path') and self.profile_path and self.profile_path != "Default" and self.profile_path != "Không cần thiết":
                 profile_path = self.profile_path
-            # -------------------------------------------------------------
+            
+            # --- KHÚC NÀY QUAN TRỌNG: ÉP CHUYỂN VỀ CHUẨN ĐƯỜNG DẪN WINDOWS SYSTEM ---
+            # Hàm abspath sẽ tự động đổi toàn bộ dấu '/' thành '\' hợp lệ với Windows Registry
+            librewolf_path = os.path.abspath(librewolf_path)
+            profile_path = os.path.abspath(profile_path)
             
             self.log(f"Hệ thống: Đường dẫn LibreWolf chính xác -> {librewolf_path}")
             self.log(f"Hệ thống: Đường dẫn Hồ sơ chính xác -> {profile_path}")
 
-            # Đóng gói cấu hình nhị phân và profile trực tiếp vào capabilities
-            options.set_capability("moz:firefoxOptions", {
-                "binary": librewolf_path,
-                "args": ["-profile", profile_path],
-                "prefs": {
-                    "dom.webdriver.enabled": False,
-                    "useAutomationExtension": False
-                }
-            })
+            # Cấu hình Options truyền thống chuẩn chỉ
+            options.binary_location = librewolf_path
+            options.add_argument("-profile")
+            options.add_argument(profile_path)
+            
+            # Khử chống bot
+            options.set_preference("dom.webdriver.enabled", False)
+            options.set_preference("useAutomationExtension", False)
             
             try:
-                # 1. Tải và định vị chính xác đường dẫn Driver thực thi cục bộ
                 driver_path = GeckoDriverManager().install()
                 service = FirefoxService(executable_path=driver_path)
                 
-                # 2. KHỞI ĐỘNG TIẾN TRÌNH GECKODRIVER NGẦM
-                service.start()
-                
-                # 3. KHỞI TẠO ĐỐI TƯỢNG DRIVER THEO CHUẨN SELENIUM MỚI
-                from selenium.webdriver.remote.webdriver import WebDriver as BaseWebDriver
-                
-                # Đưa chuỗi url dịch vụ vào command_executor VÀ truyền service để duy trì vòng đời
-                self.driver = BaseWebDriver(
-                    command_executor=service.service_url, 
-                    options=options
-                )
-                
-                # Gắn chặt đối tượng service vào driver để tự động tắt sạch tiến trình khi gọi driver.quit()
-                self.driver._service = service 
-                
+                # Khởi chạy bản phối chuẩn
+                self.driver = webdriver.Firefox(service=service, options=options)
                 self.driver.maximize_window()
                 return True
             except Exception as e:
@@ -773,39 +762,78 @@ class FacebookScraper:
                         time.sleep(2)
                         post_tab = self.driver.window_handles[-1]
                         self.driver.switch_to.window(post_tab)
-                        time.sleep(5)
+                        
+                        # Đợi popup render
+                        time.sleep(8)
 
-                        self.driver.execute_script("window.scrollBy(0, 300);")
-                        time.sleep(2)
+                        # CLICK VÀO VIEW ĐỂ FOCUS
+                        try:
+                            body = self.driver.find_element(By.TAG_NAME, "body")
+                            body.click()
+                            self.log("Đã focus vào popup bài viết.")
+                            time.sleep(1)
+                        except:
+                            pass
 
-                        like_xpath = "//div[(@aria-label='Thích' or @aria-label='Like') and @role='button']"
-                        already_liked_xpath = "//div[(@aria-label='Gỡ Thích' or @aria-label='Remove Like' or @aria-label='Unlike') and @role='button']"
+                        # SCROLL XUỐNG ĐỂ HIỆN ACTION BAR
+                        try:
+                            self.driver.execute_script("""
+                                const modal = document.querySelector('[role="dialog"]');
+                                if (modal) { modal.scrollTop = modal.scrollHeight; }
+                                window.scrollBy(0, 800);
+                            """)
+                            self.log("Đã scroll popup xuống.")
+                            time.sleep(4)
+                        except Exception as e:
+                            self.log(f"Lỗi scroll popup: {e}")
 
-                        liked_btn = self.driver.find_elements(By.XPATH, already_liked_xpath)
-                        if liked_btn:
-                            self.log("Facebook: Bài viết đã được Like trước đó. Tiến hành Re-like...")
-                            self.driver.execute_script("arguments[0].click();", liked_btn[0])
+                        like_xpath = "//div[@role='button'][@aria-label='Like' or @aria-label='Thích']"
+                        unlike_xpath = "//div[@role='button'][@aria-label='Unlike' or @aria-label='Gỡ Thích' or @aria-label='Remove Like']"
+
+                        def click_button(xpath):
+                            buttons = self.driver.find_elements(By.XPATH, xpath)
+                            self.log(f"Tìm thấy {len(buttons)} nút với xpath.")
+                            for btn in reversed(buttons):
+                                try:
+                                    if not btn.is_displayed(): continue
+                                    self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", btn)
+                                    time.sleep(1)
+                                    self.driver.execute_script("""
+                                        arguments[0].dispatchEvent(new MouseEvent('click', {
+                                            bubbles: true, cancelable: true, view: window
+                                        }));
+                                    """, btn)
+                                    time.sleep(2)
+                                    return True
+                                except Exception as e:
+                                    self.log(f"Lỗi click: {e}")
+                            return False
+
+                        clicked = False
+                        if click_button(unlike_xpath):
+                            self.log("Đã unlike bài viết.")
                             time.sleep(2)
-                            
-                            unliked_btn = self.driver.find_elements(By.XPATH, like_xpath)
-                            if unliked_btn:
-                                self.driver.execute_script("arguments[0].click();", unliked_btn[0])
-                                self.log("Facebook: Đã Re-like bài viết thành công.")
+                            if click_button(like_xpath):
+                                self.log("Đã re-like bài viết.")
+                                clicked = True
+                        elif click_button(like_xpath):
+                            self.log("Đã like bài viết.")
+                            clicked = True
+
+                        # VERIFY
+                        if clicked:
+                            time.sleep(3)
+                            verified = any(v.is_displayed() for v in self.driver.find_elements(By.XPATH, unlike_xpath))
+                            self.log("Xác nhận: Bài viết đã được like." if verified else "❌ Click xong nhưng chưa chuyển trạng thái.")
                         else:
-                            unliked_btn = self.driver.find_elements(By.XPATH, like_xpath)
-                            if unliked_btn:
-                                self.driver.execute_script("arguments[0].click();", unliked_btn[0])
-                                self.log("Facebook: Đã Like bài viết thành công.")
-                            else:
-                                self.log("Cảnh báo: Không định vị được nút Like của bài viết này.")
+                            self.log("Không tìm thấy nút Like.")
 
                         time.sleep(2)
                         self.driver.close()
                         self.driver.switch_to.window(self.odoo_tab)
                         self.check_pause_and_stop()
-                else:
-                    # Log thông báo nếu người dùng chủ động tắt tính năng này
-                    self.log("Hệ thống: Bỏ qua bước kiểm tra Nhóm và Like bài viết theo cấu hình.")
+                    else:
+                        self.log("Hệ thống: Bỏ qua bước kiểm tra Bài viết theo cấu hình hoặc không có link.")
                     
                 # --- STEP 2: FACEBOOK ACTIONS (MESSAGE AND STUFF) ---
                 if not fb_link or ("facebook.com" not in fb_link and "fb.com" not in fb_link):
