@@ -18,7 +18,8 @@ CONFIG_FILE = os.path.join("data", "browser_config.json")
 
 ODOO_URLS = {
     "B2C": "https://b2c.sge.vn/odoo/crm",
-    "Yingbo Demo": "https://yingbo_demo.sge.vn/odoo/crm"
+    "Yingbo Demo": "https://yingbo_demo.sge.vn/odoo/crm",
+    "Yingbo SGE": "https://yingbo.sge.vn/odoo/crm"
 }
 
 # =========================================================
